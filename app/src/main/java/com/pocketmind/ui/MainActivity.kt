@@ -72,11 +72,14 @@ class MainActivity : AppCompatActivity() {
             text = "Memory"
             setOnClickListener { startActivity(Intent(this@MainActivity, MemoryActivity::class.java)) }
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        nav.addView(Button(this).apply {
-            text = "Tester"
-            setOnClickListener { startActivity(Intent(this@MainActivity, DiagnosticsActivity::class.java)) }
-        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         root.addView(nav)
+        root.addView(Button(this).apply {
+            text = "Tester · Run all feature tests"
+            contentDescription = "Open the all-feature PocketMind tester"
+            setOnClickListener { startActivity(Intent(this@MainActivity, DiagnosticsActivity::class.java)) }
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            bottomMargin = 6
+        })
         status = TextView(this).apply {
             textSize = 13f
             setTextColor(Color.DKGRAY)
