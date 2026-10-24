@@ -5,6 +5,10 @@ import android.content.Context
 enum class RiskLevel { LOW, MEDIUM, HIGH }
 enum class ActionStatus { VERIFIED, HANDED_OFF, FAILED, PENDING_CONFIRMATION, CANCELLED }
 
+internal object ToolApprovalPolicy {
+    fun requiresApproval(risk: RiskLevel): Boolean = risk != RiskLevel.LOW
+}
+
 data class ArgSpec(val name: String, val type: ArgType, val required: Boolean = true, val description: String = "")
 enum class ArgType { STRING, NUMBER, INTEGER, BOOLEAN }
 data class ToolSpec(val id: String, val description: String, val args: List<ArgSpec>, val risk: RiskLevel)

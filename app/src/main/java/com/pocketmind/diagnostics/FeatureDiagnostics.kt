@@ -31,13 +31,12 @@ import com.pocketmind.memory.SummaryStore
 import com.pocketmind.memory.TopicState
 import com.pocketmind.memory.TopicStateStore
 import com.pocketmind.memory.clearMemory
-import com.pocketmind.tools.ActionStatus
 import com.pocketmind.tools.PlanStep
 import com.pocketmind.tools.PlannerJson
 import com.pocketmind.tools.RuleEngine
 import com.pocketmind.tools.SafeMath
 import com.pocketmind.tools.ToolRegistry
-import com.pocketmind.tools.ToolRuntime
+import com.pocketmind.tools.ToolApprovalPolicy
 import com.pocketmind.tools.ToolSpec
 import com.pocketmind.tools.ToolValidator
 import com.pocketmind.ui.DiagnosticsActivity
@@ -107,7 +106,7 @@ data class DiagnosticReport(
     }
 }
 
-/** Runs each check in order. Only safe tools execute; state-changing tools are tested behind the confirmation gate. */
+/** Runs isolated checks in order; Start never invokes ToolRuntime or executes a tool action. */
 object FeatureDiagnostics {
     private data class Task(val title: String, val execute: suspend () -> DiagnosticCheck)
 
@@ -121,11 +120,9 @@ object FeatureDiagnostics {
         val app = context.applicationContext
         val checks = mutableListOf<DiagnosticCheck>()
         val scratchDatabases = linkedSetOf<String>()
-        val toolDatabase = scratchDatabaseName().also(scratchDatabases::add)
         val memoryDatabaseForFacts = scratchDatabaseName().also(scratchDatabases::add)
         val memoryDatabaseForPersistence = scratchDatabaseName().also(scratchDatabases::add)
         val memoryDatabaseForClear = scratchDatabaseName().also(scratchDatabases::add)
-        val runtime = ToolRuntime(app, databaseName = toolDatabase)
         val marker = "diag-${UUID.randomUUID().toString().replace("-", "").take(16)}"
         val registry = ToolRegistry()
         val validator = ToolValidator(registry)
@@ -251,55 +248,16 @@ object FeatureDiagnostics {
             }
         }
 
-        val safeSteps = listOf(
-            PlanStep("clock.time", emptyMap()),
-            PlanStep("clock.date", emptyMap()),
-            PlanStep("math.calculate", mapOf("expression" to "2 + 3 * 4")),
-            PlanStep("note.save", mapOf("text" to "diagnostic note $marker")),
-            PlanStep("note.list", emptyMap()),
-            PlanStep("note.search", mapOf("query" to marker)),
-            PlanStep("battery/status", emptyMap()),
-            PlanStep("app.search", mapOf("query" to "PocketMind"))
-        )
-        safeSteps.forEach { step ->
-            tasks += Task("Safe runtime · ${step.tool}") {
-                val result = runtime.execute(listOf(step)).singleOrNull()
-                val okay = result?.status == ActionStatus.VERIFIED && when (step.tool) {
-                    "clock.time", "clock.date" -> result.message.isNotBlank()
-                    "math.calculate" -> result.message == "14.0"
-                    "note.save" -> result.message.contains("verified", ignoreCase = true)
-                    "note.list", "note.search" -> result.message.contains(marker)
-                    "battery/status" -> Regex("Battery -?\\d+%; RAM available \\d+ MB; storage available \\d+ MB").matches(result.message)
-                    "app.search" -> true // The returned launcher names are intentionally not copied into logs or reports.
-                    else -> false
-                }
-                outcome("Safe runtime · ${step.tool}", okay,
-                    when (step.tool) {
-                        "clock.time" -> "The local clock tool returned a value."
-                        "clock.date" -> "The local date tool returned a value."
-                        "math.calculate" -> "The real tool runtime evaluated the diagnostic expression correctly."
-                        "note.save" -> "A synthetic note was saved and read back in a temporary database."
-                        "note.list" -> "The list tool found only the synthetic note in the temporary database."
-                        "note.search" -> "The search tool found the synthetic note in the temporary database."
-                        "battery/status" -> "Battery, RAM, and storage services returned parsable read-only values."
-                        else -> "The app-search tool ran without launching any matching application; app names were not recorded."
-                    },
-                    "The tool returned ${result?.status ?: "no result"}; its verified output or read-back did not match expectations.")
+        registry.all.filter { ToolApprovalPolicy.requiresApproval(it.risk) }.forEach { spec ->
+            tasks += Task("Safety · ${spec.id} requires explicit approval") {
+                val gated = ToolApprovalPolicy.requiresApproval(spec.risk)
+                outcome("Safety · ${spec.id} requires explicit approval", gated,
+                    "The pure risk policy requires explicit approval; Start did not invoke ToolRuntime or touch device state.",
+                    "The tool's risk level did not require the expected approval gate.")
             }
         }
-
-        registry.all.filter { it.risk.name != "LOW" }.forEach { spec ->
-            tasks += Task("Safety · ${spec.id} requires explicit approval") {
-                val result = runtime.execute(listOf(sampleStep(spec, marker, app.packageName))).singleOrNull()
-                outcome("Safety · ${spec.id} requires explicit approval",
-                    result?.status == ActionStatus.PENDING_CONFIRMATION,
-                    "The runtime requested confirmation and did not execute this state-changing action.",
-                    "The tool did not stop at the approval gate; observed status was ${result?.status ?: "no result"}.")
-            }
-            tasks += Task("Device action · ${spec.id} test") {
-                DiagnosticCheck("Device action · ${spec.id} test", DiagnosticStatus.NOT_RUN,
-                "Not performed by the automatic run. Use the action-test control for a preview; this real action requires a separate in-app confirmation. Skipping leaves it unrun.")
-            }
+        DiagnosticActionTestPolicy.initialChecks(registry).forEach { check ->
+            tasks += Task(check.title) { check }
         }
 
         tasks += Task("Memory · explicit fact capture, lookup, and forget") {
@@ -365,7 +323,6 @@ object FeatureDiagnostics {
                 onProgress(DiagnosticProgress(number, total, measured.title, measured.status, measured.details))
             }
         } finally {
-            runCatching { runtime.close() }
             scratchDatabases.forEach { name -> runCatching { app.deleteDatabase(name) } }
         }
 

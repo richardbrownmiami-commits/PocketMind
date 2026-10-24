@@ -418,18 +418,23 @@ class AgentController(context: Context) : Closeable {
         }
     }
 
-    /** Executes only a risk-bearing synthetic QA step after the caller's separate in-app confirmation. */
+    /** Executes a validated synthetic QA step only after the caller's exact-plan confirmation. */
     internal suspend fun runConfirmedDiagnosticAction(step: PlanStep, userApproved: Boolean): ActionResult = withContext(dispatcher) {
         ensureOpen()
         val spec = registry.get(step.tool)
-        if (spec == null || spec.risk == RiskLevel.LOW) {
-            return@withContext ActionResult(step.tool, ActionStatus.FAILED, "This confirmed-action tester accepts only registered state-changing tools.", step.args)
-        }
-        val runtime = ToolRuntime(app, registry, validator)
+        if (spec == null) return@withContext ActionResult(step.tool, ActionStatus.FAILED, "Unknown diagnostic tool.", step.args)
+        val invalid = validator.validate(step)
+        if (invalid != null) return@withContext ActionResult(step.tool, ActionStatus.FAILED, invalid, step.args)
+        if (!userApproved) return@withContext ActionResult(step.tool, ActionStatus.PENDING_CONFIRMATION,
+            "Explicit in-app confirmation is required before any Tester runtime call.", step.args)
+        val isolated = spec.risk == RiskLevel.LOW
+        val scratchName = if (isolated) "pocketmind_qa_${UUID.randomUUID().toString().replace("-", "")}.db" else "pocketmind_memory.db"
+        val runtime = ToolRuntime(app, registry, validator, scratchName)
         try {
-            runtime.execute(listOf(step), if (userApproved) setOf(step.tool) else emptySet()).single()
+            runtime.execute(listOf(step), setOf(step.tool)).single()
         } finally {
             runtime.close()
+            if (isolated) runCatching { app.deleteDatabase(scratchName) }
         }
     }
 
@@ -439,6 +444,17 @@ class AgentController(context: Context) : Closeable {
         val runtime = ToolRuntime(app, registry, validator)
         try {
             runtime.restoreMediaVolumeIndex(index, userApproved)
+        } finally {
+            runtime.close()
+        }
+    }
+
+    /** Requests dismissal only for the uniquely labeled Tester alarm after separate confirmation. */
+    internal suspend fun dismissDiagnosticAlarmByLabel(label: String, userApproved: Boolean): ActionResult = withContext(dispatcher) {
+        ensureOpen()
+        val runtime = ToolRuntime(app, registry, validator)
+        try {
+            runtime.dismissDiagnosticAlarmByLabel(label, userApproved)
         } finally {
             runtime.close()
         }

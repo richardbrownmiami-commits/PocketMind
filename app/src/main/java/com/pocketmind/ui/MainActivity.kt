@@ -24,8 +24,11 @@ import com.pocketmind.diagnostics.SyntheticChatTestContract
 import com.pocketmind.diagnostics.SyntheticFeatureRouteQa
 import com.pocketmind.diagnostics.SyntheticModelQa
 import com.pocketmind.tools.ToolValidator
+import com.pocketmind.tools.PlanStep
 import com.pocketmind.memory.AppDatabase
 import com.pocketmind.memory.MessageStore
+import org.json.JSONArray
+import org.json.JSONObject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -51,6 +54,7 @@ class MainActivity : AppCompatActivity() {
     private var syntheticModelLoadedAtStart = false
     private var syntheticQaStatus = DiagnosticStatus.NOT_RUN
     private val syntheticRouteStatuses = linkedMapOf<String, DiagnosticStatus>()
+    private val syntheticRoutePlans = linkedMapOf<String, String>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -173,6 +177,7 @@ class MainActivity : AppCompatActivity() {
         syntheticModelLoadedAtStart = false
         syntheticQaStatus = DiagnosticStatus.NOT_RUN
         syntheticRouteStatuses.clear()
+        syntheticRoutePlans.clear()
         var completed = false
         uiScope.launch {
             val syntheticTurns = mutableListOf<String>()
@@ -180,32 +185,46 @@ class MainActivity : AppCompatActivity() {
             var qaFailed = false
             try {
                 syntheticModelLoadedAtStart = controller.syntheticChatModelAvailable()
-                for (probe in SyntheticModelQa.probes) {
-                    if (syntheticStopRequested) break
-                    val answer = appendSyntheticChatTurn(probe.prompt, syntheticTurns)
-                    if (syntheticStopRequested) break
-                    if (answer.modelLoaded) {
-                        qaChecked++
-                        if (!SyntheticModelQa.responseContainsExpectedAnswer(answer.text, probe.expectedAnswer)) qaFailed = true
+                val actionToolId = intent.getStringExtra(SyntheticChatTestContract.EXTRA_ACTION_ROUTE_TOOL)
+                if (actionToolId == null) {
+                    for (probe in SyntheticModelQa.probes) {
+                        if (syntheticStopRequested) break
+                        val answer = appendSyntheticChatTurn(probe.prompt, syntheticTurns)
+                        if (syntheticStopRequested) break
+                        if (answer.modelLoaded) {
+                            qaChecked++
+                            if (!SyntheticModelQa.responseContainsExpectedAnswer(answer.text, probe.expectedAnswer)) qaFailed = true
+                        }
                     }
+                    syntheticQaStatus = when {
+                        !syntheticModelLoadedAtStart || syntheticStopRequested || qaChecked != SyntheticModelQa.probes.size -> DiagnosticStatus.NOT_RUN
+                        qaFailed -> DiagnosticStatus.FAIL
+                        else -> DiagnosticStatus.PASS
+                    }
+                } else {
+                    syntheticQaStatus = DiagnosticStatus.NOT_RUN
                 }
-                syntheticQaStatus = when {
-                    !syntheticModelLoadedAtStart || syntheticStopRequested || qaChecked != SyntheticModelQa.probes.size -> DiagnosticStatus.NOT_RUN
-                    qaFailed -> DiagnosticStatus.FAIL
-                    else -> DiagnosticStatus.PASS
-                }
-                for (probe in SyntheticFeatureRouteQa.probes) {
+                val routeProbes = if (actionToolId == null) SyntheticFeatureRouteQa.probes
+                    else SyntheticFeatureRouteQa.probes.filter { it.toolId == actionToolId }
+                val actionRoutePrompt = intent.getStringExtra(SyntheticChatTestContract.EXTRA_ACTION_ROUTE_PROMPT)
+                if (actionToolId != null && routeProbes.isEmpty()) syntheticRouteStatuses[actionToolId] = DiagnosticStatus.FAIL
+                for (probe in routeProbes) {
                     if (syntheticStopRequested) break
-                    val answer = appendSyntheticChatTurn(probe.prompt, syntheticTurns)
+                    val prompt = actionRoutePrompt?.takeIf { actionToolId == probe.toolId } ?: probe.prompt
+                    val answer = appendSyntheticChatTurn(prompt, syntheticTurns)
                     if (syntheticStopRequested) {
                         syntheticRouteStatuses[probe.toolId] = DiagnosticStatus.NOT_RUN
                         break
                     }
+                    val routeMatches = answer.plan != null && if (actionRoutePrompt != null && actionToolId == probe.toolId) {
+                        answer.plan.singleOrNull()?.let { it.tool == probe.toolId && ToolValidator().validate(it) == null } == true
+                    } else SyntheticFeatureRouteQa.matches(probe, answer.plan, ToolValidator())
                     syntheticRouteStatuses[probe.toolId] = when {
-                        answer.plan != null && SyntheticFeatureRouteQa.matches(probe, answer.plan, ToolValidator()) -> DiagnosticStatus.PASS
+                        routeMatches -> DiagnosticStatus.PASS
                         answer.plan == null && !answer.modelLoaded -> DiagnosticStatus.NOT_RUN
                         else -> DiagnosticStatus.FAIL
                     }
+                    if (routeMatches) syntheticRoutePlans[probe.toolId] = encodePlan(answer.plan.orEmpty())
                 }
                 completed = !syntheticStopRequested
             } catch (_: Exception) {
@@ -235,7 +254,19 @@ class MainActivity : AppCompatActivity() {
             .putStringArrayListExtra(SyntheticChatTestContract.EXTRA_ROUTE_IDS, ArrayList(routeIds))
             .putStringArrayListExtra(SyntheticChatTestContract.EXTRA_ROUTE_STATUSES,
                 ArrayList(routeIds.map { (syntheticRouteStatuses[it] ?: DiagnosticStatus.NOT_RUN).name }))
+            .putExtra(SyntheticChatTestContract.EXTRA_ACTION_ROUTE_TOOL,
+                intent.getStringExtra(SyntheticChatTestContract.EXTRA_ACTION_ROUTE_TOOL))
+            .putExtra(SyntheticChatTestContract.EXTRA_ACTION_ROUTE_PLAN_JSON,
+                intent.getStringExtra(SyntheticChatTestContract.EXTRA_ACTION_ROUTE_TOOL)?.let(syntheticRoutePlans::get))
     }
+
+    private fun encodePlan(steps: List<PlanStep>): String = JSONObject().put("steps", JSONArray().apply {
+        steps.forEach { step ->
+            val args = JSONObject()
+            step.args.forEach { (key, value) -> args.put(key, value) }
+            put(JSONObject().put("tool", step.tool).put("args", args))
+        }
+    }).toString()
 
     private fun restoreSyntheticChatSession(state: Bundle) {
         input.visibility = View.GONE
@@ -251,6 +282,10 @@ class MainActivity : AppCompatActivity() {
         val ids = state.getStringArrayList(STATE_ROUTE_IDS).orEmpty()
         val statuses = state.getStringArrayList(STATE_ROUTE_STATUSES).orEmpty()
         syntheticRouteStatuses.clear()
+        syntheticRoutePlans.clear()
+        state.getString(STATE_ACTION_ROUTE_PLAN)?.let { json ->
+            intent.getStringExtra(SyntheticChatTestContract.EXTRA_ACTION_ROUTE_TOOL)?.let { syntheticRoutePlans[it] = json }
+        }
         ids.zip(statuses).forEach { (id, value) ->
             runCatching { syntheticRouteStatuses[id] = DiagnosticStatus.valueOf(value) }
         }
@@ -368,6 +403,9 @@ class MainActivity : AppCompatActivity() {
             outState.putStringArrayList(STATE_ROUTE_IDS, ArrayList(routeIds))
             outState.putStringArrayList(STATE_ROUTE_STATUSES,
                 ArrayList(routeIds.map { (syntheticRouteStatuses[it] ?: DiagnosticStatus.NOT_RUN).name }))
+            intent.getStringExtra(SyntheticChatTestContract.EXTRA_ACTION_ROUTE_TOOL)?.let { toolId ->
+                syntheticRoutePlans[toolId]?.let { outState.putString(STATE_ACTION_ROUTE_PLAN, it) }
+            }
             val result = syntheticResultIntent
             outState.putBoolean(STATE_HAS_RESULT, result != null)
             if (result != null) {
@@ -407,5 +445,6 @@ class MainActivity : AppCompatActivity() {
         const val STATE_HAS_RESULT = "pocketmind.syntheticQa.hasResult"
         const val STATE_RESULT_COMPLETED = "pocketmind.syntheticQa.resultCompleted"
         const val STATE_RESULT_INTERRUPTED = "pocketmind.syntheticQa.resultInterrupted"
+        const val STATE_ACTION_ROUTE_PLAN = "pocketmind.syntheticQa.actionRoutePlan"
     }
 }

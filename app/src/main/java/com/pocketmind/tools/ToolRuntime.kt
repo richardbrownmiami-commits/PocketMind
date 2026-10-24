@@ -56,7 +56,7 @@ class ToolRuntime(
             val invalid = validator.validate(step)
             if (invalid != null) return@map finish(step, ActionStatus.FAILED, invalid)
             val spec = registry.get(step.tool) ?: return@map finish(step, ActionStatus.FAILED, "Unknown tool")
-            if (spec.risk != RiskLevel.LOW && step.tool !in approved) {
+            if (ToolApprovalPolicy.requiresApproval(spec.risk) && step.tool !in approved) {
                 return@map finish(step, ActionStatus.PENDING_CONFIRMATION, "Explicit approval is required before this action.")
             }
             var result = perform(step)
@@ -125,7 +125,7 @@ class ToolRuntime(
             .putExtra(AlarmClock.EXTRA_MINUTES, minute)
             .putExtra(AlarmClock.EXTRA_SKIP_UI, true)
         (step.args["label"] as? String)?.let { intent.putExtra(AlarmClock.EXTRA_MESSAGE, it.take(80)) }
-        if (intent.resolveActivity(app.packageManager) == null) return handoff(step, "No Clock app accepted the alarm request.")
+        if (intent.resolveActivity(app.packageManager) == null) return failed(step, "No Clock app can handle an alarm.")
         app.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         val target = LocalDate.now().atTime(hour, minute).let { if (!it.isAfter(LocalDateTime.now())) it.plusDays(1) else it }
         val expectedMillis = target.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
@@ -137,6 +137,24 @@ class ToolRuntime(
         }
     }
 
+    /** Dismisses only the uniquely labeled Tester alarm, and only after a separate in-app approval. */
+    fun dismissDiagnosticAlarmByLabel(label: String, userApproved: Boolean): ActionResult {
+        val step = PlanStep("alarm.dismiss", mapOf("label" to label))
+        if (!userApproved) return finish(step, ActionStatus.PENDING_CONFIRMATION, "Separate explicit approval is required before dismissing the Tester alarm.")
+        if (!TesterAlarmLabel.isValid(label)) {
+            return finish(step, ActionStatus.FAILED, "The label is not a PocketMind Tester alarm label; no alarm was dismissed.")
+        }
+        val intent = Intent(AlarmClock.ACTION_DISMISS_ALARM)
+            .putExtra(AlarmClock.EXTRA_ALARM_SEARCH_MODE, AlarmClock.ALARM_SEARCH_MODE_LABEL)
+            .putExtra(AlarmClock.EXTRA_MESSAGE, label)
+            .putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+        if (intent.resolveActivity(app.packageManager) == null) {
+            return finish(step, ActionStatus.FAILED, "No Clock app accepted label-scoped alarm dismissal.")
+        }
+        app.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        return finish(step, ActionStatus.HANDED_OFF, "Requested dismissal of only the uniquely labeled PocketMind Tester alarm; read-back is required before claiming cleanup.")
+    }
+
     private fun setTimer(step: PlanStep): ActionResult {
         val seconds = (step.args["seconds"] as Number).toInt()
         val intent = Intent(AlarmClock.ACTION_SET_TIMER)
@@ -144,7 +162,7 @@ class ToolRuntime(
             .putExtra(AlarmClock.EXTRA_SKIP_UI, true)
         if (intent.resolveActivity(app.packageManager) == null) return failed(step, "No Clock app can handle a timer.")
         app.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        return handoff(step, "Opened the Clock app with the timer request. Please check or start it there.")
+        return handoff(step, "Android accepted ACTION_SET_TIMER with EXTRA_SKIP_UI=true, which requests immediate timer start; Android exposes no timer-state read-back here, so completion and cleanup remain user-assisted.")
     }
 
     private fun setTorch(step: PlanStep, enabled: Boolean): ActionResult {

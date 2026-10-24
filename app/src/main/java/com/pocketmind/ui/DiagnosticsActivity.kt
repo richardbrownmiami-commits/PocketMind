@@ -1,10 +1,8 @@
 package com.pocketmind.ui
 
-import android.app.AlarmManager
 import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Color
-import android.media.AudioManager
 import android.os.Bundle
 import android.os.SystemClock
 import android.text.InputType
@@ -25,15 +23,19 @@ import com.pocketmind.diagnostics.DiagnosticCheck
 import com.pocketmind.diagnostics.DiagnosticProgress
 import com.pocketmind.diagnostics.DiagnosticReport
 import com.pocketmind.diagnostics.DiagnosticStatus
+import com.pocketmind.diagnostics.DeviceStateReader
+import com.pocketmind.diagnostics.DiagnosticActionTestPolicy
 import com.pocketmind.diagnostics.FeatureDiagnostics
 import com.pocketmind.diagnostics.SyntheticChatTestContract
 import com.pocketmind.diagnostics.SyntheticChatTestResults
-import com.pocketmind.diagnostics.SyntheticFeatureRouteProbe
 import com.pocketmind.diagnostics.SyntheticFeatureRouteQa
 import com.pocketmind.tools.ActionStatus
+import com.pocketmind.tools.ActionResult
 import com.pocketmind.tools.PlanStep
-import com.pocketmind.tools.RiskLevel
+import com.pocketmind.tools.PlannerJson
 import com.pocketmind.tools.ToolRegistry
+import com.pocketmind.tools.ToolValidator
+import com.pocketmind.tools.TesterAlarmLabel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -43,10 +45,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.time.Duration
+import java.time.LocalDate
 import java.time.LocalDateTime
-import java.time.LocalTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 import kotlin.coroutines.resume
 
 class DiagnosticsActivity : AppCompatActivity() {
@@ -64,12 +67,40 @@ class DiagnosticsActivity : AppCompatActivity() {
     private val actionButtons = mutableMapOf<String, Button>()
     private val runningActionTests = mutableSetOf<String>()
     private val completedActionTests = mutableSetOf<String>()
+    private var activeDeviceActionToolId: String? = null
+    private var activeRoutePrompt: String? = null
+    private var activeExpectedRouteArgs: Map<String, Any?> = emptyMap()
+    private var actionSnapshot: DeviceActionSnapshot? = null
+    private var pendingExternalAction: PendingExternalAction? = null
     private var report: DiagnosticReport? = null
+
+    private data class DeviceActionSnapshot(
+        val volumeIndex: Int? = null,
+        val volumeMaximum: Int? = null,
+        val brightness: Int? = null,
+        val flashlightEnabled: Boolean? = null,
+        val settingsState: String? = null,
+        val previousNextAlarmMillis: Long? = null,
+        val targetAlarmMillis: Long? = null,
+        val alarmLabel: String? = null
+    )
+
+    private data class PendingExternalAction(
+        val toolId: String,
+        val step: PlanStep,
+        val button: Button,
+        val snapshot: DeviceActionSnapshot,
+        val beforeState: String,
+        var activityPaused: Boolean = false,
+        var returnedToTester: Boolean = false,
+        var result: ActionResult? = null
+    )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         syntheticChatLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            continueTesterRun(syntheticChatResults(result), uiChecksForRun)
+            if (activeDeviceActionToolId != null) handleManualChatRoute(result)
+            else continueTesterRun(syntheticChatResults(result), uiChecksForRun)
         }
         buildView()
     }
@@ -88,7 +119,7 @@ class DiagnosticsActivity : AppCompatActivity() {
         }
         root.addView(title)
         root.addView(TextView(this).apply {
-            text = "Run every feature check one by one. The tester briefly opens Chat and shows fixed synthetic questions and feature requests as temporary turns; they are not saved. Real device-action tests are separate and require confirmation before they can run; each can be skipped. Volume restoration needs a second confirmation. Alarm tests require a time you enter at least two hours ahead, and the tester will not claim an alarm was cleared."
+            text = "Start runs private synthetic Chat questions, routing checks, and isolated diagnostics only; it does not execute tool actions. Each tool has a separate test button and asks Chat first. Every real runtime call shows the exact action and requires confirmation. Reversible changes require a second confirmation to restore. Alarm tests ask for your time, set a labeled real alarm, check Android's next-alarm read-back, and offer separate confirmed cleanup. Timer tests ask for a duration and start a real timer; Android 11 does not expose reliable timer read-back or a unique cancel handle, so that result stays user-assisted/NOT_RUN."
             textSize = 14f
             setTextColor(Color.DKGRAY)
             setPadding(0, 8, 0, 10)
@@ -162,6 +193,11 @@ class DiagnosticsActivity : AppCompatActivity() {
         actionButtons.clear()
         runningActionTests.clear()
         completedActionTests.clear()
+        activeDeviceActionToolId = null
+        activeRoutePrompt = null
+        activeExpectedRouteArgs = emptyMap()
+        actionSnapshot = null
+        pendingExternalAction = null
         reportBody.removeAllViews()
         state.text = "Testing all registered features…"
         uiChecksForRun = testerUiChecks()
@@ -192,7 +228,8 @@ class DiagnosticsActivity : AppCompatActivity() {
             qaStatus = qaStatus,
             routeStatuses = routes,
             completed = data.getBooleanExtra(SyntheticChatTestContract.EXTRA_COMPLETED, false),
-            interrupted = data.getBooleanExtra(SyntheticChatTestContract.EXTRA_INTERRUPTED, false)
+            interrupted = data.getBooleanExtra(SyntheticChatTestContract.EXTRA_INTERRUPTED, false),
+            actionRoutePlanJson = data.getStringExtra(SyntheticChatTestContract.EXTRA_ACTION_ROUTE_PLAN_JSON)
         )
     }
 
@@ -279,26 +316,24 @@ class DiagnosticsActivity : AppCompatActivity() {
         logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
     }
 
-    private data class VolumeSnapshot(val index: Int, val maximum: Int)
-
     private fun addDeviceActionTestControls() {
         val header = TextView(this).apply {
-            text = "Optional real-action tests"
+            text = "Optional per-tool real verification"
             textSize = 18f
             setTextColor(Color.BLACK)
             setPadding(0, 18, 0, 4)
         }
         reportBody.addView(header)
         reportBody.addView(TextView(this).apply {
-            text = "Each button asks the rule-first/local-model route for a synthetic action plan, shows the exact action, then waits for Confirm or Skip. Confirmed actions are recorded in PocketMind's action log. Alarm tests are not automatically cleared."
+            text = "Each test first asks its synthetic request in transient Chat; alarm/time and timer/duration values come from you, not a guessed default. No prompt or response is saved. The exact tool and arguments are shown before confirmation. Flashlight, volume, brightness, and the alarm are read back; restoration/clearing needs a separate confirmation. Timers start immediately after confirmation but Android 11 offers no reliable timer-state read-back or unique cancel handle, so check Clock > Timer and stop it there if running. Radio/location tests open Android settings without silently toggling them."
             textSize = 14f
             setTextColor(Color.DKGRAY)
             setPadding(0, 0, 0, 8)
         })
-        ToolRegistry().all.filter { it.risk != RiskLevel.LOW }.forEach { spec ->
+        ToolRegistry().all.forEach { spec ->
             val button = Button(this).apply {
-                text = "Test ${spec.id} action"
-                contentDescription = "Test ${spec.id}; requires explicit confirmation"
+                text = "Test ${spec.id}"
+                contentDescription = "Ask Chat to route ${spec.id}, then require confirmation before runtime execution"
                 setOnClickListener { startActionTest(spec.id, this) }
             }
             actionButtons[spec.id] = button
@@ -308,310 +343,762 @@ class DiagnosticsActivity : AppCompatActivity() {
 
     private fun startActionTest(toolId: String, button: Button) {
         if (toolId in completedActionTests || !runningActionTests.add(toolId)) return
+        if (activeDeviceActionToolId != null) {
+            runningActionTests.remove(toolId)
+            state.text = "Finish the current ${activeDeviceActionToolId} test before starting another tool."
+            return
+        }
+        activeDeviceActionToolId = toolId
         button.isEnabled = false
-        if (toolId == "alarm.set") requestAlarmTestTime(toolId, button)
-        else prepareAndConfirmAction(toolId, button, null, null)
+        runButton.isEnabled = false
+        shareButton.isEnabled = false
+        uiScope.launch {
+            try {
+                actionSnapshot = withContext(Dispatchers.IO) { captureActionSnapshot(toolId) }
+                if (SyntheticFeatureRouteQa.probes.none { it.toolId == toolId }) {
+                    updateManualCheck(toolId, DiagnosticStatus.NOT_RUN, "No fixed synthetic Chat request is registered for this tool; no action was run.")
+                    finishActionTest(toolId, button, completed = false)
+                    return@launch
+                }
+                when (toolId) {
+                    "alarm.set" -> showAlarmTimeInput(button)
+                    "timer.set" -> showTimerDurationInput(button)
+                    else -> launchManualChatProbe(toolId)
+                }
+            } catch (_: Exception) {
+                updateManualCheck(toolId, DiagnosticStatus.NOT_RUN, "The transient Chat route could not be opened; no device action was run.")
+                finishActionTest(toolId, button, completed = false)
+            }
+        }
     }
 
-    private fun requestAlarmTestTime(toolId: String, button: Button) {
+    private fun showAlarmTimeInput(button: Button) {
         val input = EditText(this).apply {
-            hint = "HH:MM (24-hour local time)"
+            hint = "HH:MM (24-hour)"
             inputType = InputType.TYPE_CLASS_DATETIME or InputType.TYPE_DATETIME_VARIATION_TIME
-            isSingleLine = true
+            setSingleLine(true)
+            contentDescription = "User-selected test alarm time in 24-hour HH:MM format"
         }
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(28, 8, 28, 0)
-            addView(TextView(this@DiagnosticsActivity).apply {
-                text = "Choose a specific local time at least two hours from now. No alarm is set until the next screen, where you will see the date, time, and label before confirming. The tester will not automatically clear the alarm."
-                textSize = 14f
-                setTextColor(Color.DKGRAY)
-            })
-            addView(input)
-        }
-        var handled = false
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Choose the alarm test time")
-            .setView(content)
-            .setNegativeButton("Skip") { _, _ ->
-                handled = true
-                updateManualCheck(toolId, DiagnosticStatus.NOT_RUN, "Skipped before choosing a time; no alarm was set.")
-                finishActionTest(toolId, button, completed = false)
+            .setTitle("Choose a test alarm time")
+            .setMessage("Enter the next occurrence you want. It must be at least two hours away. The tester will create a real alarm labeled for cleanup; it will remain scheduled unless you separately confirm removal.")
+            .setView(input)
+            .setNegativeButton("Cancel") { _, _ ->
+                updateManualCheck("alarm.set", DiagnosticStatus.NOT_RUN, "Cancelled before choosing a time; no alarm action or Chat route was run.")
+                finishActionTest("alarm.set", button, completed = false)
             }
-            .setPositiveButton("Review time", null)
+            .setPositiveButton("Continue to Chat", null)
             .create()
         dialog.setOnCancelListener {
-            if (!handled) {
-                updateManualCheck(toolId, DiagnosticStatus.NOT_RUN, "Cancelled before choosing a time; no alarm was set.")
-                finishActionTest(toolId, button, completed = false)
-            }
+            updateManualCheck("alarm.set", DiagnosticStatus.NOT_RUN, "Time selection was cancelled; no alarm action or Chat route was run.")
+            finishActionTest("alarm.set", button, completed = false)
         }
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val value = input.text.toString().trim()
-                val selected = if (Regex("^(?:[01]\\d|2[0-3]):[0-5]\\d$").matches(value)) {
-                    runCatching { LocalTime.parse(value, DateTimeFormatter.ofPattern("HH:mm")) }.getOrNull()
-                } else null
-                if (selected == null) {
-                    input.error = "Enter a valid time as HH:MM"
+                val match = Regex("^(?:([01]\\d|2[0-3])):([0-5]\\d)$").matchEntire(input.text.toString().trim())
+                if (match == null) {
+                    input.error = "Enter an exact time such as 18:30"
                     return@setOnClickListener
                 }
+                val hour = match.groupValues[1].toInt()
+                val minute = match.groupValues[2].toInt()
                 val now = LocalDateTime.now()
-                var scheduledAt = now.toLocalDate().atTime(selected)
-                if (!scheduledAt.isAfter(now)) scheduledAt = scheduledAt.plusDays(1)
-                if (Duration.between(now, scheduledAt).toMinutes() < 120) {
-                    input.error = "Choose a time at least two hours ahead"
+                var target = LocalDate.now().atTime(hour, minute)
+                if (!target.isAfter(now)) target = target.plusDays(1)
+                if (Duration.between(now, target) < Duration.ofHours(2)) {
+                    input.error = "The next occurrence is less than two hours away; choose a later time"
                     return@setOnClickListener
                 }
-                handled = true
+                val timestamp = target.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                val existing = actionSnapshot?.previousNextAlarmMillis
+                if (existing != null && kotlin.math.abs(existing - timestamp) <= 90_000L) {
+                    input.error = "A next alarm already exists at that time; choose a different time"
+                    return@setOnClickListener
+                }
+                val label = TesterAlarmLabel.create()
+                val displayTime = DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault()).format(target)
+                val displayDate = DateTimeFormatter.ofPattern("EEE, MMM d", Locale.getDefault()).format(target)
+                actionSnapshot = (actionSnapshot ?: DeviceActionSnapshot()).copy(
+                    targetAlarmMillis = timestamp,
+                    alarmLabel = label
+                )
+                activeExpectedRouteArgs = mapOf("hour" to hour, "minute" to minute)
+                activeRoutePrompt = "Set alarm for $displayTime labeled $label"
                 dialog.dismiss()
-                prepareAndConfirmAction(toolId, button, selected, scheduledAt)
+                launchManualChatProbe("alarm.set", activeRoutePrompt)
+                state.text = "Chat is routing the alarm request for $displayDate $displayTime; no alarm has been set yet."
             }
         }
         dialog.show()
     }
 
-    private fun manualActionProbe(toolId: String, alarmTime: LocalTime?): SyntheticFeatureRouteProbe? = when (toolId) {
-        "alarm.set" -> alarmTime?.let { time ->
-            val prompt = "Set an alarm for ${time.format(DateTimeFormatter.ofPattern("HH:mm"))} labeled PocketMind QA diagnostic"
-            SyntheticFeatureRouteProbe(toolId, prompt, mapOf("hour" to time.hour, "minute" to time.minute, "label" to "PocketMind QA diagnostic"))
+    private fun showTimerDurationInput(button: Button) {
+        val input = EditText(this).apply {
+            hint = "Minutes (1–1440)"
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setSingleLine(true)
+            contentDescription = "User-selected real test timer duration in minutes"
         }
-        "timer.set" -> SyntheticFeatureRouteProbe(toolId, "Set a timer for 60 seconds", mapOf("seconds" to 60))
-        "flashlight" -> SyntheticFeatureRouteProbe(toolId, "Turn on the flashlight", mapOf("enabled" to true))
-        "volume" -> SyntheticFeatureRouteProbe(toolId, "Raise the media volume", mapOf("step" to 1))
-        "brightness" -> SyntheticFeatureRouteProbe(toolId, "Set display brightness to 128", mapOf("level" to 128))
-        "app.open" -> SyntheticFeatureRouteProbe(toolId, "Open the app with package com.android.settings", mapOf("package" to "com.android.settings"))
-        "wifi.settings" -> SyntheticFeatureRouteProbe(toolId, "Open Wi-Fi settings")
-        "bluetooth.settings" -> SyntheticFeatureRouteProbe(toolId, "Open Bluetooth settings")
-        "airplane.settings" -> SyntheticFeatureRouteProbe(toolId, "Open airplane mode settings")
-        "location.settings" -> SyntheticFeatureRouteProbe(toolId, "Open location settings")
-        else -> null
-    }
-
-    private fun prepareAndConfirmAction(toolId: String, button: Button, alarmTime: LocalTime?, scheduledAt: LocalDateTime?) {
-        uiScope.launch {
-            try {
-                state.text = "Preparing a synthetic ${toolId} route; no action has been executed."
-                val probe = manualActionProbe(toolId, alarmTime)
-                if (probe == null) {
-                    updateManualCheck(toolId, DiagnosticStatus.NOT_RUN, "No safe synthetic action fixture exists; no action was executed.")
-                    finishActionTest(toolId, button, completed = false)
-                    return@launch
-                }
-                val controller = (application as PocketMindApplication).agentController
-                val routed = withContext(Dispatchers.IO) { controller.runFeatureRouteDiagnostic(probe) }
-                val step = routed.plan
-                if (routed.status != DiagnosticStatus.PASS || step == null) {
-                    val details = if (routed.status == DiagnosticStatus.NOT_RUN)
-                        "A local model is needed for this route and none is loaded; no action was executed."
-                    else "The synthetic request did not produce the expected validated tool plan; no action was executed."
-                    updateManualCheck(toolId, routed.status, details)
-                    finishActionTest(toolId, button, completed = false)
-                    return@launch
-                }
-                val volumeSnapshot = if (toolId == "volume") {
-                    val audio = getSystemService(AUDIO_SERVICE) as AudioManager
-                    VolumeSnapshot(audio.getStreamVolume(AudioManager.STREAM_MUSIC), audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC))
-                } else null
-                if (volumeSnapshot != null && volumeSnapshot.index >= volumeSnapshot.maximum) {
-                    updateManualCheck(toolId, DiagnosticStatus.NOT_RUN, "Media volume is already at maximum, so the one-step raise was not run.")
-                    finishActionTest(toolId, button, completed = false)
-                    return@launch
-                }
-                val previousAlarm = if (toolId == "alarm.set") {
-                    (getSystemService(ALARM_SERVICE) as AlarmManager).nextAlarmClock?.triggerTime
-                } else null
-                showActionConfirmation(toolId, step, button, volumeSnapshot, alarmTime, scheduledAt, previousAlarm)
-            } catch (_: Exception) {
-                updateManualCheck(toolId, DiagnosticStatus.FAIL, "The action preview could not be prepared; no action was executed.")
-                finishActionTest(toolId, button, completed = false)
-            }
-        }
-    }
-
-    private fun actionPreview(toolId: String, step: PlanStep, volume: VolumeSnapshot?, scheduledAt: LocalDateTime?): String = when (toolId) {
-        "alarm.set" -> "Set a real Android alarm for ${scheduledAt?.format(DateTimeFormatter.ofPattern("EEE, d MMM 'at' HH:mm"))} labeled ‘PocketMind QA diagnostic’. It may remain scheduled; the tester will not automatically clear it or claim it was cleared."
-        "timer.set" -> "Start a real 60-second timer in the Clock app. The tester cannot silently cancel it."
-        "flashlight" -> "Turn the phone flashlight on. The state will be read back; it may remain on until you turn it off."
-        "volume" -> "Raise media volume by one device step from ${volume?.index}/${volume?.maximum} to ${(volume?.index ?: 0) + 1}/${volume?.maximum}. The tester will read it back, then ask separately before restoring the original level."
-        "brightness" -> "Set display brightness to level ${step.args["level"]} of 255. This is a real screen change and will not run until you confirm."
-        "app.open" -> "Open Android Settings (${step.args["package"]}). This will leave the tester screen until you return."
-        "wifi.settings" -> "Open Android Wi-Fi settings. No Wi-Fi setting will be changed automatically."
-        "bluetooth.settings" -> "Open Android Bluetooth settings. No Bluetooth setting will be changed automatically."
-        "airplane.settings" -> "Open Android airplane-mode settings. Airplane mode will not be toggled automatically."
-        "location.settings" -> "Open Android location settings. Location will not be toggled automatically."
-        else -> "Run the proposed ${step.tool} action."
-    }
-
-    private fun showActionConfirmation(
-        toolId: String,
-        step: PlanStep,
-        button: Button,
-        volume: VolumeSnapshot?,
-        alarmTime: LocalTime?,
-        scheduledAt: LocalDateTime?,
-        previousAlarm: Long?
-    ) {
-        var handled = false
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Confirm real action test?")
-            .setMessage(actionPreview(toolId, step, volume, scheduledAt))
-            .setNegativeButton("Skip") { _, _ ->
-                handled = true
-                updateManualCheck(toolId, DiagnosticStatus.NOT_RUN, "Skipped at the action preview; no device action was taken.")
-                finishActionTest(toolId, button, completed = false)
+            .setTitle("Choose a real test timer duration")
+            .setMessage("Enter a duration in minutes. After the later action confirmation, Android will start this timer immediately and it may ring. PocketMind cannot read its running state or safely cancel it; you may need to stop it in Clock > Timer.")
+            .setView(input)
+            .setNegativeButton("Cancel") { _, _ ->
+                updateManualCheck("timer.set", DiagnosticStatus.NOT_RUN, "Cancelled before choosing a duration; no timer action or Chat route was run.")
+                finishActionTest("timer.set", button, completed = false)
             }
-            .setPositiveButton("Confirm & run") { _, _ ->
-                handled = true
-                executeConfirmedAction(toolId, step, button, volume, alarmTime, scheduledAt, previousAlarm)
-            }
+            .setPositiveButton("Continue to Chat", null)
             .create()
         dialog.setOnCancelListener {
-            if (!handled) {
-                updateManualCheck(toolId, DiagnosticStatus.NOT_RUN, "Cancelled at the action preview; no device action was taken.")
-                finishActionTest(toolId, button, completed = false)
+            updateManualCheck("timer.set", DiagnosticStatus.NOT_RUN, "Duration selection was cancelled; no timer action or Chat route was run.")
+            finishActionTest("timer.set", button, completed = false)
+        }
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val minutes = input.text.toString().trim().toIntOrNull()
+                if (minutes == null || minutes !in 1..1440) {
+                    input.error = "Enter a whole duration from 1 to 1440 minutes"
+                    return@setOnClickListener
+                }
+                val seconds = minutes * 60
+                activeExpectedRouteArgs = mapOf("seconds" to seconds)
+                activeRoutePrompt = "Set a timer for $minutes minutes"
+                dialog.dismiss()
+                launchManualChatProbe("timer.set", activeRoutePrompt)
+                state.text = "Chat is routing the $minutes-minute timer request; no timer has started yet."
             }
         }
         dialog.show()
     }
 
-    private fun executeConfirmedAction(
-        toolId: String,
-        step: PlanStep,
-        button: Button,
-        volume: VolumeSnapshot?,
-        alarmTime: LocalTime?,
-        scheduledAt: LocalDateTime?,
-        previousAlarm: Long?
-    ) {
-        if (toolId == "volume" && volume != null) {
-            val audio = getSystemService(AUDIO_SERVICE) as AudioManager
-            if (audio.getStreamVolume(AudioManager.STREAM_MUSIC) != volume.index) {
-                updateManualCheck(toolId, DiagnosticStatus.NOT_RUN, "Media volume changed while the preview was open; no action was run to avoid overwriting it. Rerun the test.")
+    private fun launchManualChatProbe(toolId: String, prompt: String? = null) {
+        state.text = "Opening transient Chat to ask the ${toolId} request; no real action will run yet."
+        val intent = Intent(this, MainActivity::class.java)
+            .putExtra(SyntheticChatTestContract.EXTRA_RUN, true)
+            .putExtra(SyntheticChatTestContract.EXTRA_ACTION_ROUTE_TOOL, toolId)
+        prompt?.let { intent.putExtra(SyntheticChatTestContract.EXTRA_ACTION_ROUTE_PROMPT, it) }
+        syntheticChatLauncher.launch(intent)
+    }
+
+    private fun captureActionSnapshot(toolId: String): DeviceActionSnapshot = when (toolId) {
+        "volume" -> runCatching {
+            val (index, maximum) = DeviceStateReader.mediaVolume(this)
+            DeviceActionSnapshot(volumeIndex = index, volumeMaximum = maximum)
+        }.getOrDefault(DeviceActionSnapshot())
+        "brightness" -> DeviceActionSnapshot(brightness = DeviceStateReader.brightness(this))
+        "flashlight" -> DeviceActionSnapshot(flashlightEnabled = DeviceStateReader.flashlightEnabled(this))
+        "alarm.set" -> DeviceActionSnapshot(previousNextAlarmMillis = DeviceStateReader.nextAlarmClockTriggerMillis(this))
+        "wifi.settings", "bluetooth.settings", "airplane.settings", "location.settings" ->
+            DeviceActionSnapshot(settingsState = DeviceStateReader.settingsState(this, toolId))
+        else -> DeviceActionSnapshot()
+    }
+
+    private fun handleManualChatRoute(activityResult: ActivityResult) {
+        val toolId = activeDeviceActionToolId ?: return
+        val button = actionButtons[toolId] ?: return
+        if (activityResult.resultCode != RESULT_OK || activityResult.data == null) {
+            updateManualCheck(toolId, DiagnosticStatus.NOT_RUN, "The synthetic Chat route was cancelled or did not return; no real tool was executed.")
+            finishActionTest(toolId, button, completed = false)
+            return
+        }
+        val chat = syntheticChatResults(activityResult)
+        val routeStatus = chat.routeStatuses[toolId] ?: DiagnosticStatus.NOT_RUN
+        if (!chat.completed || routeStatus != DiagnosticStatus.PASS) {
+            val reason = when {
+                routeStatus == DiagnosticStatus.FAIL -> "The fixed request shown in Chat did not produce the expected validated tool plan; no real action was run."
+                !chat.sessionStarted -> "The synthetic Chat route did not start or return; no real action was run."
+                !chat.modelLoaded && routeStatus == DiagnosticStatus.NOT_RUN -> "No local model was loaded for this planner route; no real action was run."
+                chat.interrupted -> "The synthetic Chat route was interrupted; it was not repeated and no real action was run."
+                else -> "The Chat route did not finish with a validated plan; no real action was run."
+            }
+            updateManualCheck(toolId, routeStatus, reason)
+            finishActionTest(toolId, button, completed = false)
+            return
+        }
+        var step = runCatching { PlannerJson.parse(chat.actionRoutePlanJson.orEmpty()).singleOrNull() }.getOrNull()
+        val validation = step?.let(ToolValidator()::validate)
+        if (step == null || step.tool != toolId || validation != null) {
+            updateManualCheck(toolId, DiagnosticStatus.FAIL, "Chat returned no single validated plan for this tool; the tester rejected it and ran nothing.")
+            finishActionTest(toolId, button, completed = false)
+            return
+        }
+        if (activeExpectedRouteArgs.isNotEmpty() && !matchesChosenActionArguments(step)) {
+            updateManualCheck(toolId, DiagnosticStatus.FAIL, "The Chat route did not preserve the exact time/duration you entered; the plan was rejected and no action was run.")
+            finishActionTest(toolId, button, completed = false)
+            return
+        }
+        if (toolId == "alarm.set") {
+            val label = actionSnapshot?.alarmLabel
+            if (label == null || actionSnapshot?.targetAlarmMillis == null) {
+                updateManualCheck(toolId, DiagnosticStatus.NOT_RUN, "No user-selected alarm time and unique label are available; no alarm was set.")
+                finishActionTest(toolId, button, completed = false)
+                return
+            }
+            step = step.copy(args = step.args + ("label" to label))
+            if (ToolValidator().validate(step) != null) {
+                updateManualCheck(toolId, DiagnosticStatus.FAIL, "The exact labeled alarm plan did not pass schema validation; no action was run.")
                 finishActionTest(toolId, button, completed = false)
                 return
             }
         }
-        if (toolId == "alarm.set" && scheduledAt != null && Duration.between(LocalDateTime.now(), scheduledAt).toMinutes() < 120) {
-            updateManualCheck(toolId, DiagnosticStatus.NOT_RUN, "The chosen time is now less than two hours away; no alarm was set. Choose a later time and rerun.")
-            finishActionTest(toolId, button, completed = false)
-            return
-        }
-        uiScope.launch {
-            try {
-                state.text = "Running the user-confirmed ${toolId} action test…"
-                val controller = (application as PocketMindApplication).agentController
-                val result = withContext(Dispatchers.IO) { controller.runConfirmedDiagnosticAction(step, userApproved = true) }
-                if (toolId == "volume" && volume != null) {
-                    handleVolumeTestResult(button, volume, result)
-                } else {
-                    val (status, details) = when (toolId) {
-                        "alarm.set" -> alarmResult(result.status, scheduledAt, previousAlarm)
-                        "timer.set" -> when (result.status) {
-                            ActionStatus.HANDED_OFF -> DiagnosticStatus.WARN to "The Clock app received the confirmed 60-second timer request, but running state was handed off and not verified. The action was logged."
-                            ActionStatus.VERIFIED -> DiagnosticStatus.PASS to "The timer action was verified and logged."
-                            ActionStatus.FAILED -> DiagnosticStatus.FAIL to "The confirmed timer action failed. The result was logged."
-                            else -> DiagnosticStatus.NOT_RUN to "The timer action was not completed."
-                        }
-                        else -> when (result.status) {
-                            ActionStatus.VERIFIED -> DiagnosticStatus.PASS to "The confirmed ${toolId} action completed with runtime read-back and was logged."
-                            ActionStatus.HANDED_OFF -> DiagnosticStatus.WARN to "Android received the confirmed ${toolId} request, but final state was handed off and not verified. The action was logged."
-                            ActionStatus.FAILED -> DiagnosticStatus.FAIL to "The confirmed ${toolId} action failed. The result was logged."
-                            else -> DiagnosticStatus.NOT_RUN to "The action did not complete."
-                        }
-                    }
-                    updateManualCheck(toolId, status, details)
-                    finishActionTest(toolId, button, completed = true)
+        val snapshot = actionSnapshot ?: DeviceActionSnapshot()
+        when (toolId) {
+            "volume" -> {
+                val index = snapshot.volumeIndex
+                val maximum = snapshot.volumeMaximum
+                if (index == null || maximum == null || maximum <= 0) {
+                    updateManualCheck(toolId, DiagnosticStatus.NOT_RUN, "Android did not provide a usable media-volume range; no volume change was attempted.")
+                    finishActionTest(toolId, button, completed = false)
+                    return
                 }
-            } catch (_: Exception) {
-                updateManualCheck(toolId, DiagnosticStatus.FAIL, "The confirmed action did not return a verifiable result. Check the phone state and action log before retrying.")
-                finishActionTest(toolId, button, completed = true)
+                if ((step.args["step"] as? Number)?.toInt() != 1) {
+                    updateManualCheck(toolId, DiagnosticStatus.FAIL, "Chat did not return the exact one-step volume increase fixture; nothing was run.")
+                    finishActionTest(toolId, button, completed = false)
+                    return
+                }
+                if (index >= maximum) {
+                    updateManualCheck(toolId, DiagnosticStatus.NOT_RUN, "Media volume is already at its maximum; the routed one-step increase could not change state, so it was not run.")
+                    finishActionTest(toolId, button, completed = false)
+                    return
+                }
+            }
+            "alarm.set" -> if (snapshot.targetAlarmMillis == null || snapshot.alarmLabel == null) {
+                updateManualCheck(toolId, DiagnosticStatus.NOT_RUN, "A user-selected alarm time is missing; no alarm was set.")
+                finishActionTest(toolId, button, completed = false)
+                return
+            }
+            "timer.set" -> if (step.args["seconds"] !is Number || (step.args["seconds"] as Number).toInt() !in 60..86_400) {
+                updateManualCheck(toolId, DiagnosticStatus.FAIL, "The Chat route did not return a valid user-selected timer duration; no timer was started.")
+                finishActionTest(toolId, button, completed = false)
+                return
+            }
+            "brightness" -> if (snapshot.brightness == null || !DeviceStateReader.brightnessWriteGranted(this)) {
+                updateManualCheck(toolId, DiagnosticStatus.NOT_RUN, "Android 11 requires the user to grant WRITE_SETTINGS special access before PocketMind can change or read brightness. Access is not granted, so no setting screen was opened and brightness was not changed. Grant it in Android Settings, then rerun.")
+                finishActionTest(toolId, button, completed = false)
+                return
+            }
+            "flashlight" -> if (snapshot.flashlightEnabled == null) {
+                updateManualCheck(toolId, DiagnosticStatus.NOT_RUN, "No flash or no authoritative CameraManager torch-state callback was available; the flashlight was not changed.")
+                finishActionTest(toolId, button, completed = false)
+                return
+            }
+            "wifi.settings", "bluetooth.settings", "airplane.settings", "location.settings" -> if (snapshot.settingsState.isNullOrBlank() || snapshot.settingsState.contains("unavailable", true)) {
+                updateManualCheck(toolId, DiagnosticStatus.NOT_RUN, "Android did not expose the current setting state for before/after verification (${snapshot.settingsState ?: "no read-back"}); no settings screen was opened.")
+                finishActionTest(toolId, button, completed = false)
+                return
             }
         }
+        showActionConfirmation(toolId, step, button, snapshot)
     }
 
-    private fun alarmResult(status: ActionStatus, scheduledAt: LocalDateTime?, previousAlarm: Long?): Pair<DiagnosticStatus, String> {
-        val target = scheduledAt?.atZone(ZoneId.systemDefault())?.toInstant()?.toEpochMilli()
-        val preexistingMatch = target != null && previousAlarm != null && kotlin.math.abs(previousAlarm - target) <= 90_000L
-        return when {
-            status == ActionStatus.VERIFIED && preexistingMatch -> DiagnosticStatus.WARN to "Android reports an alarm at the selected time, but one was already present before this test, so creation could not be distinguished. The action was logged; the tester did not claim it was cleared."
-            status == ActionStatus.VERIFIED -> DiagnosticStatus.PASS to "Android's next-alarm state matched the user-selected test time. The action was logged. The alarm remains scheduled; the tester did not attempt or claim removal."
-            status == ActionStatus.HANDED_OFF -> DiagnosticStatus.WARN to "Android received the user-confirmed alarm request, but did not expose a matching next alarm for verification. The action was logged; check the Clock app. No clearing is claimed."
-            status == ActionStatus.FAILED -> DiagnosticStatus.FAIL to "The confirmed alarm request failed or could not be verified. The result was logged; no removal is claimed."
-            else -> DiagnosticStatus.NOT_RUN to "The alarm action did not complete; no removal is claimed."
+    private fun matchesChosenActionArguments(step: PlanStep): Boolean = activeExpectedRouteArgs.all { (key, expected) ->
+        val actual = step.args[key] ?: return@all false
+        if (expected is Number && actual is Number) expected.toDouble() == actual.toDouble() else actual == expected
+    }
+
+    private fun actionPreview(toolId: String, step: PlanStep, snapshot: DeviceActionSnapshot): String {
+        val action = when (toolId) {
+            "clock.time" -> "Read the current local time; no setting or saved data will change."
+            "clock.date" -> "Read today's local date; no setting or saved data will change."
+            "math.calculate" -> "Evaluate the synthetic arithmetic expression in an isolated tool call."
+            "note.save" -> "Save only the synthetic note to a disposable QA database, read it back, then delete that database."
+            "note.list" -> "List notes from an empty disposable QA database; your saved notes will not be opened."
+            "note.search" -> "Search an empty disposable QA database; your saved notes will not be opened."
+            "alarm.set" -> "Set a real one-time Clock alarm for ${formatAlarmTarget(snapshot.targetAlarmMillis)} with label '${snapshot.alarmLabel}'. It may ring and remains scheduled until dismissed. Android AlarmManager next-alarm read-back will be checked after return. Clearing is a separate confirmation; if verification fails, remove this exact label in Clock > Alarms."
+            "timer.set" -> "Start a real $((step.args["seconds"] as Number).toInt() / 60)-minute Clock timer now. It may ring. Android 11 gives PocketMind no reliable timer-running read-back or unique cancel handle, so this result will remain user-assisted/NOT_RUN; check Clock > Timer and tap Stop/Cancel if it is running."
+            "battery/status" -> "Read battery, available RAM, and storage values; no runtime gate, stop, or unload is applied."
+            "app.search" -> "Search launcher entries for the synthetic query; no app will be launched and app names are not copied to the report."
+            "flashlight" -> "Turn the phone flashlight on. Before state: ${snapshot.flashlightEnabled}. The state will be read back; if it changes, restoring it requires a separate confirmation."
+            "volume" -> "Raise media volume one step from ${snapshot.volumeIndex}/${snapshot.volumeMaximum} to ${(snapshot.volumeIndex ?: 0) + 1}/${snapshot.volumeMaximum}. The result will be read back; restoring the original index requires a separate confirmation."
+            "brightness" -> "Set screen brightness to ${step.args["level"]} of 255 (before: ${snapshot.brightness}). The value will be read back; restoring the original value requires a separate confirmation."
+            "app.open" -> "Open the exact package ${step.args["package"]} (Android Settings). This leaves the tester until you return; only the launch handoff can be checked."
+            "wifi.settings" -> "Open Android Wi-Fi settings. PocketMind will not toggle Wi-Fi; its Boolean state is recorded before and after you return."
+            "bluetooth.settings" -> "Open Android Bluetooth settings. PocketMind will not toggle Bluetooth; its Boolean state is recorded before and after you return."
+            "airplane.settings" -> "Open Android airplane-mode settings. PocketMind will not toggle airplane mode; its Boolean state is recorded before and after you return."
+            "location.settings" -> "Open Android location settings. PocketMind will not toggle location; its Boolean state is recorded before and after you return."
+            else -> "Run this validated synthetic tool plan after confirmation."
         }
-    }
-
-    private fun handleVolumeTestResult(button: Button, original: VolumeSnapshot, result: com.pocketmind.tools.ActionResult) {
-        val audio = getSystemService(AUDIO_SERVICE) as AudioManager
-        val observed = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
-        val expected = (original.index + 1).coerceAtMost(original.maximum)
-        val raisedAndVerified = result.status == ActionStatus.VERIFIED && observed == expected && observed > original.index
-        if (observed != original.index) {
-            showVolumeRestoreConfirmation(button, original, observed, raisedAndVerified)
-        } else {
-            val status = if (raisedAndVerified) DiagnosticStatus.PASS else if (result.status == ActionStatus.FAILED) DiagnosticStatus.FAIL else DiagnosticStatus.WARN
-            updateManualCheck("volume", status, if (status == DiagnosticStatus.PASS)
-                "The one-step media-volume raise was read back and logged." else "The media-volume change was not verified; no restore was needed because the original level is still present. The result was logged.")
-            finishActionTest("volume", button, completed = true)
+        val args = step.args.entries.sortedBy { it.key }.joinToString(prefix = "{", postfix = "}") { (key, value) -> "$key=$value" }
+        val before = when (toolId) {
+            "volume" -> "${snapshot.volumeIndex}/${snapshot.volumeMaximum}"
+            "brightness" -> snapshot.brightness?.toString() ?: "unavailable"
+            "flashlight" -> snapshot.flashlightEnabled?.toString() ?: "unavailable"
+            "alarm.set" -> if (snapshot.previousNextAlarmMillis == null) "Android reported no existing next alarm" else "Android reported an existing next alarm (time omitted)"
+            "wifi.settings", "bluetooth.settings", "airplane.settings", "location.settings" -> snapshot.settingsState ?: "unavailable"
+            else -> "read-only / no persistent state"
         }
+        return "$action\n\nExact validated Chat plan: ${step.tool} $args\nCaptured before: $before\n\nConfirm runs only this plan. Skip or Back runs nothing."
     }
 
-    private fun showVolumeRestoreConfirmation(button: Button, original: VolumeSnapshot, observed: Int, raisedAndVerified: Boolean) {
+    private fun formatAlarmTarget(timestamp: Long?): String = timestamp?.let {
+        DateTimeFormatter.ofPattern("EEE, MMM d 'at' h:mm a z", Locale.getDefault())
+            .withZone(ZoneId.systemDefault()).format(java.time.Instant.ofEpochMilli(it))
+    } ?: "unavailable"
+
+    private fun showActionConfirmation(toolId: String, step: PlanStep, button: Button, snapshot: DeviceActionSnapshot) {
         var handled = false
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Restore the original media volume?")
-            .setMessage("The original level was ${original.index}/${original.maximum}; read-back after the test is $observed/${original.maximum}. This is a second device change. Confirm to restore exactly, or skip and leave the current level.")
-            .setNegativeButton("Skip restore") { _, _ ->
+            .setTitle("Confirm real tool test?")
+            .setMessage(actionPreview(toolId, step, snapshot))
+            .setNegativeButton("Skip — do nothing") { _, _ ->
                 handled = true
-                finishVolumeTest(button, raisedAndVerified, restored = false, restoreVerified = false)
+                updateManualCheck(toolId, DiagnosticStatus.NOT_RUN, "Skipped at the exact-plan confirmation; no real tool call or device change was made.")
+                finishActionTest(toolId, button, completed = false)
             }
-            .setPositiveButton("Restore original") { _, _ ->
+            .setPositiveButton("Confirm exact plan") { _, _ ->
                 handled = true
-                restoreOriginalVolume(button, original, observed, raisedAndVerified)
+                executeConfirmedAction(toolId, step, button, snapshot)
             }
             .create()
         dialog.setOnCancelListener {
-            if (!handled) finishVolumeTest(button, raisedAndVerified, restored = false, restoreVerified = false)
+            if (!handled) {
+                updateManualCheck(toolId, DiagnosticStatus.NOT_RUN, "The exact-plan confirmation was cancelled; no real tool call or device change was made.")
+                finishActionTest(toolId, button, completed = false)
+            }
         }
         dialog.show()
     }
 
-    private fun restoreOriginalVolume(button: Button, original: VolumeSnapshot, observed: Int, raisedAndVerified: Boolean) {
+    private fun changedSincePreview(toolId: String, snapshot: DeviceActionSnapshot): String? = when (toolId) {
+        "volume" -> if (DeviceStateReader.mediaVolume(this).first != snapshot.volumeIndex) "Media volume changed while Chat or the preview was open; it was not overwritten. Rerun to capture a fresh value." else null
+        "brightness" -> if (!DeviceStateReader.brightnessWriteGranted(this) || DeviceStateReader.brightness(this) != snapshot.brightness) "Brightness access or value changed while the preview was open; nothing was written. Grant access or recapture the value, then rerun." else null
+        "flashlight" -> if (DeviceStateReader.flashlightEnabled(this) != snapshot.flashlightEnabled) "Flashlight state changed while Chat or the preview was open; it was not overwritten. Rerun to capture a fresh value." else null
+        "alarm.set" -> alarmPreviewChangeReason(snapshot)
+        "wifi.settings", "bluetooth.settings", "airplane.settings", "location.settings" -> if (DeviceStateReader.settingsState(this, toolId) != snapshot.settingsState) "The system state changed while Chat or the preview was open; no settings screen was opened. Rerun to capture a fresh value." else null
+        else -> null
+    }
+
+    private fun alarmPreviewChangeReason(snapshot: DeviceActionSnapshot): String? {
+        val targetMillis = snapshot.targetAlarmMillis
+            ?: return "No user-selected alarm time is available; no alarm was set."
+        val target = java.time.Instant.ofEpochMilli(targetMillis).atZone(ZoneId.systemDefault()).toLocalDateTime()
+        if (Duration.between(LocalDateTime.now(), target) < Duration.ofHours(2)) {
+            return "The selected alarm time is now less than two hours away; no alarm was set. Rerun and choose a later time."
+        }
+        if (DeviceStateReader.nextAlarmClockTriggerMillis(this) != snapshot.previousNextAlarmMillis) {
+            return "The system's next-alarm state changed while Chat or the preview was open; no new alarm was set. Rerun to capture a fresh state."
+        }
+        return null
+    }
+
+    private fun executeConfirmedAction(toolId: String, step: PlanStep, button: Button, snapshot: DeviceActionSnapshot) {
+        changedSincePreview(toolId, snapshot)?.let { reason ->
+            updateManualCheck(toolId, DiagnosticStatus.NOT_RUN, reason)
+            finishActionTest(toolId, button, completed = false)
+            return
+        }
+        val isExternal = toolId == "app.open" || toolId.endsWith(".settings") || toolId == "alarm.set" || toolId == "timer.set"
+        if (isExternal) pendingExternalAction = PendingExternalAction(toolId, step, button, snapshot, snapshot.settingsState ?: "not applicable")
         uiScope.launch {
             try {
-                val audio = getSystemService(AUDIO_SERVICE) as AudioManager
-                if (audio.getStreamVolume(AudioManager.STREAM_MUSIC) != observed) {
-                    finishVolumeTest(button, raisedAndVerified, restored = false, restoreVerified = false, externallyChanged = true)
-                    return@launch
-                }
+                state.text = "Running the explicitly confirmed ${toolId} tool test…"
                 val controller = (application as PocketMindApplication).agentController
-                val result = withContext(Dispatchers.IO) { controller.restoreDiagnosticVolumeIndex(original.index, userApproved = true) }
-                val verified = result.status == ActionStatus.VERIFIED && audio.getStreamVolume(AudioManager.STREAM_MUSIC) == original.index
-                finishVolumeTest(button, raisedAndVerified, restored = true, restoreVerified = verified)
+                val result = withContext(Dispatchers.IO) { controller.runConfirmedDiagnosticAction(step, userApproved = true) }
+                if (isExternal) {
+                    pendingExternalAction?.let { pending ->
+                        if (pending.toolId == toolId) {
+                            pending.result = result
+                            if (pending.returnedToTester) completeExternalAction(pending)
+                            else window.decorView.postDelayed({
+                                if (pendingExternalAction === pending && !pending.activityPaused) {
+                                    when (toolId) {
+                                        "alarm.set" -> completeAlarmSet(pending)
+                                        "timer.set" -> completeTimerAction(pending, returnedToTester = false)
+                                        else -> {
+                                            pendingExternalAction = null
+                                            updateManualCheck(toolId, DiagnosticStatus.NOT_RUN, "Android returned ${result.status.name}, but the Tester never observed an external app/screen open. No state change is claimed.")
+                                            finishActionTest(toolId, button, completed = false)
+                                        }
+                                    }
+                                }
+                            }, 900L)
+                        }
+                    }
+                } else handleConfirmedResult(toolId, step, button, snapshot, result)
             } catch (_: Exception) {
-                finishVolumeTest(button, raisedAndVerified, restored = true, restoreVerified = false)
+                pendingExternalAction = null
+                if (toolId == "alarm.set") {
+                    updateManualCheck(toolId, DiagnosticStatus.NOT_RUN, "The confirmed Clock alarm request did not return. It may still have been created; open Clock > Alarms and remove any alarm labeled '${snapshot.alarmLabel}'. Do not retry until you check.")
+                } else if (toolId == "timer.set") {
+                    updateManualCheck(toolId, DiagnosticStatus.NOT_RUN, "The confirmed Clock timer request did not return. It may still be running; open Clock > Timer and tap Stop/Cancel if it is. Do not retry until you check.")
+                } else {
+                    updateManualCheck(toolId, DiagnosticStatus.FAIL, "The explicitly confirmed tool call did not return a verifiable result. Check the device state before retrying.")
+                }
+                finishActionTest(toolId, button, completed = toolId == "alarm.set" || toolId == "timer.set")
             }
         }
     }
 
-    private fun finishVolumeTest(
-        button: Button,
-        raisedAndVerified: Boolean,
-        restored: Boolean,
-        restoreVerified: Boolean,
-        externallyChanged: Boolean = false
-    ) {
+    private fun handleConfirmedResult(toolId: String, step: PlanStep, button: Button, snapshot: DeviceActionSnapshot, result: ActionResult) {
+        when (toolId) {
+            "volume" -> handleVolumeResult(button, snapshot, result)
+            "brightness" -> handleBrightnessResult(button, step, snapshot, result)
+            "flashlight" -> handleFlashlightResult(button, snapshot, result)
+            else -> {
+                val (status, details) = when (result.status) {
+                    ActionStatus.VERIFIED -> DiagnosticStatus.PASS to when (toolId) {
+                        "note.save" -> "The synthetic note was written and read back in a disposable database, then that database was deleted. User notes were not read or changed."
+                        "note.list", "note.search" -> "The real note tool ran against an empty disposable database; user notes were not read or changed."
+                        "app.search" -> "The real launcher search completed without opening an app; returned app names were not placed in the report."
+                        "battery/status" -> "The real read-only battery/RAM/storage tool returned values; no memory gate, generation stop, or model unload was applied."
+                        else -> "The explicitly confirmed ${toolId} runtime returned a verified result. Synthetic outputs were not copied into the report."
+                    }
+                    ActionStatus.FAILED -> DiagnosticStatus.FAIL to "The explicitly confirmed ${toolId} runtime failed: ${result.message.take(160)}"
+                    ActionStatus.HANDED_OFF -> DiagnosticStatus.NOT_RUN to "The tool handed control to Android without a read-back; no completion is claimed."
+                    else -> DiagnosticStatus.NOT_RUN to "The tool did not run (${result.status}); no device action is claimed."
+                }
+                updateManualCheck(toolId, status, details)
+                finishActionTest(toolId, button, completed = status == DiagnosticStatus.PASS || status == DiagnosticStatus.FAIL)
+            }
+        }
+    }
+
+    private fun handleVolumeResult(button: Button, snapshot: DeviceActionSnapshot, result: ActionResult) {
+        val original = snapshot.volumeIndex ?: run {
+            updateManualCheck("volume", DiagnosticStatus.NOT_RUN, "The original media-volume level was unavailable; no restore is claimed.")
+            finishActionTest("volume", button, completed = false)
+            return
+        }
+        val maximum = snapshot.volumeMaximum ?: 0
+        val observed = runCatching { DeviceStateReader.mediaVolume(this).first }.getOrNull()
+        val expected = (original + 1).coerceAtMost(maximum)
+        val verified = result.status == ActionStatus.VERIFIED && observed == expected && observed > original
+        if (observed != null && observed != original) showVolumeRestoreConfirmation(button, original, maximum, observed, verified)
+        else {
+            val status = if (verified) DiagnosticStatus.PASS else if (result.status == ActionStatus.FAILED) DiagnosticStatus.FAIL else DiagnosticStatus.WARN
+            updateManualCheck("volume", status, if (verified) "Media volume changed from $original/$maximum to $observed/$maximum and matched read-back." else "Expected one-step increase to $expected/$maximum was not observed (read-back: ${observed ?: "unavailable"}/$maximum); the value did not change, so no restoration was needed.")
+            finishActionTest("volume", button, completed = status != DiagnosticStatus.WARN)
+        }
+    }
+
+    private fun showVolumeRestoreConfirmation(button: Button, original: Int, maximum: Int, observed: Int, raisedAndVerified: Boolean) {
+        var handled = false
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Restore original media volume?")
+            .setMessage("Before: $original/$maximum. After read-back: $observed/$maximum. Restoring is a separate device change. Confirm to restore exactly; otherwise the current level is left as-is.")
+            .setNegativeButton("Leave current level") { _, _ ->
+                handled = true
+                finishVolumeTest(button, original, maximum, observed, raisedAndVerified, restored = false)
+            }
+            .setPositiveButton("Confirm restore") { _, _ ->
+                handled = true
+                restoreOriginalVolume(button, original, maximum, observed, raisedAndVerified)
+            }
+            .create()
+        dialog.setOnCancelListener { if (!handled) finishVolumeTest(button, original, maximum, observed, raisedAndVerified, restored = false) }
+        dialog.show()
+    }
+
+    private fun restoreOriginalVolume(button: Button, original: Int, maximum: Int, observed: Int, raisedAndVerified: Boolean) {
+        uiScope.launch {
+            try {
+                if (DeviceStateReader.mediaVolume(this@DiagnosticsActivity).first != observed) {
+                    finishVolumeTest(button, original, maximum, observed, raisedAndVerified, restored = false, externalChange = true)
+                    return@launch
+                }
+                val controller = (application as PocketMindApplication).agentController
+                val result = withContext(Dispatchers.IO) { controller.restoreDiagnosticVolumeIndex(original, userApproved = true) }
+                val actual = DeviceStateReader.mediaVolume(this@DiagnosticsActivity).first
+                finishVolumeTest(button, original, maximum, observed, raisedAndVerified, restored = true, restoreVerified = result.status == ActionStatus.VERIFIED && actual == original, externalChange = actual != original && result.status != ActionStatus.FAILED)
+            } catch (_: Exception) {
+                finishVolumeTest(button, original, maximum, observed, raisedAndVerified, restored = true, restoreVerified = false)
+            }
+        }
+    }
+
+    private fun finishVolumeTest(button: Button, original: Int, maximum: Int, observed: Int, raisedAndVerified: Boolean, restored: Boolean, restoreVerified: Boolean = false, externalChange: Boolean = false) {
+        val finalValue = runCatching { DeviceStateReader.mediaVolume(this).first }.getOrNull()
         val (status, details) = when {
-            externallyChanged -> DiagnosticStatus.WARN to "The media volume changed after the restore prompt, so the tester did not overwrite it. Review the current level; action log entries are retained."
-            raisedAndVerified && restored && restoreVerified -> DiagnosticStatus.PASS to "The one-step media-volume increase was read back, then the original level was restored and read back after separate confirmation. Both actions were logged."
-            raisedAndVerified && restored -> DiagnosticStatus.WARN to "The one-step increase was read back, but exact restoration could not be verified. Check the current media volume; both actions were logged."
-            raisedAndVerified -> DiagnosticStatus.WARN to "The one-step increase was read back, but restore was skipped; the media volume remains changed. The action was logged."
-            restored && restoreVerified -> DiagnosticStatus.FAIL to "The expected one-step increase was not verified; the original volume was restored and read back. Actions were logged."
-            else -> DiagnosticStatus.WARN to "The increase and/or restoration could not be verified. Check the current media volume; the tester does not claim restoration. Actions were logged."
+            externalChange -> DiagnosticStatus.WARN to "Media volume changed during restoration; PocketMind did not overwrite the new value. Before=$original/$maximum, action read-back=$observed/$maximum, final read-back=${finalValue ?: "unavailable"}/$maximum."
+            raisedAndVerified && restored && restoreVerified -> DiagnosticStatus.PASS to "Media volume before=$original/$maximum, after=$observed/$maximum, restored=$finalValue/$maximum; both action and separate restore were read back and confirmed."
+            raisedAndVerified && restored -> DiagnosticStatus.WARN to "Increase was read back ($observed/$maximum), but original level $original/$maximum could not be verified after the separate restore. Check the current level."
+            raisedAndVerified -> DiagnosticStatus.WARN to "Increase was read back ($observed/$maximum), but restore was skipped; current level is ${finalValue ?: "unavailable"}/$maximum."
+            restored && restoreVerified -> DiagnosticStatus.FAIL to "Expected one-step increase was not verified; original volume $original/$maximum was separately restored and read back."
+            else -> DiagnosticStatus.WARN to "The expected increase was not verified. Before=$original/$maximum, after=$observed/$maximum, final=${finalValue ?: "unavailable"}/$maximum; no restore success is claimed."
         }
         updateManualCheck("volume", status, details)
         finishActionTest("volume", button, completed = true)
+    }
+
+    private fun handleBrightnessResult(button: Button, step: PlanStep, snapshot: DeviceActionSnapshot, result: ActionResult) {
+        val original = snapshot.brightness ?: run {
+            updateManualCheck("brightness", DiagnosticStatus.NOT_RUN, "The original brightness value or WRITE_SETTINGS access was unavailable; no restoration is claimed.")
+            finishActionTest("brightness", button, completed = false)
+            return
+        }
+        val target = (step.args["level"] as Number).toInt()
+        val observed = DeviceStateReader.brightness(this)
+        val verified = result.status == ActionStatus.VERIFIED && observed == target
+        if (observed != null && observed != original) showBrightnessRestoreConfirmation(button, original, observed, verified)
+        else {
+            val status = if (verified) DiagnosticStatus.PASS else if (result.status == ActionStatus.FAILED) DiagnosticStatus.FAIL else DiagnosticStatus.WARN
+            updateManualCheck("brightness", status, "Brightness before=$original, requested=$target, read-back=${observed ?: "unavailable"}; no restoration was necessary because the value did not change, or no restoration is claimed.")
+            finishActionTest("brightness", button, completed = status != DiagnosticStatus.WARN)
+        }
+    }
+
+    private fun showBrightnessRestoreConfirmation(button: Button, original: Int, observed: Int, verified: Boolean) {
+        var handled = false
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Restore original brightness?")
+            .setMessage("Before: $original/255. After read-back: $observed/255. Restoring is a separate display change. Confirm to restore exactly; otherwise brightness remains at its current value.")
+            .setNegativeButton("Leave current brightness") { _, _ ->
+                handled = true
+                finishBrightnessTest(button, original, observed, verified, restored = false)
+            }
+            .setPositiveButton("Confirm restore") { _, _ ->
+                handled = true
+                restoreBrightness(button, original, observed, verified)
+            }
+            .create()
+        dialog.setOnCancelListener { if (!handled) finishBrightnessTest(button, original, observed, verified, restored = false) }
+        dialog.show()
+    }
+
+    private fun restoreBrightness(button: Button, original: Int, observed: Int, verified: Boolean) {
+        uiScope.launch {
+            if (!DeviceStateReader.brightnessWriteGranted(this@DiagnosticsActivity) || DeviceStateReader.brightness(this@DiagnosticsActivity) != observed) {
+                finishBrightnessTest(button, original, observed, verified, restored = false, externalChange = true)
+                return@launch
+            }
+            try {
+                val controller = (application as PocketMindApplication).agentController
+                val result = withContext(Dispatchers.IO) {
+                    controller.runConfirmedDiagnosticAction(PlanStep("brightness", mapOf("level" to original)), userApproved = true)
+                }
+                val actual = DeviceStateReader.brightness(this@DiagnosticsActivity)
+                finishBrightnessTest(button, original, observed, verified, restored = true, restoreVerified = result.status == ActionStatus.VERIFIED && actual == original)
+            } catch (_: Exception) {
+                finishBrightnessTest(button, original, observed, verified, restored = true, restoreVerified = false)
+            }
+        }
+    }
+
+    private fun finishBrightnessTest(button: Button, original: Int, observed: Int, verified: Boolean, restored: Boolean, restoreVerified: Boolean = false, externalChange: Boolean = false) {
+        val finalValue = DeviceStateReader.brightness(this)
+        val (status, details) = when {
+            externalChange -> DiagnosticStatus.WARN to "Brightness changed externally or WRITE_SETTINGS access was revoked; PocketMind did not overwrite it. Before=$original, action read-back=$observed, final=${finalValue ?: "unavailable"}."
+            verified && restored && restoreVerified -> DiagnosticStatus.PASS to "Brightness before=$original/255, after=$observed/255, restored=${finalValue ?: "unavailable"}/255; both writes were read back after separate confirmation."
+            verified && restored -> DiagnosticStatus.WARN to "Brightness change was read back ($observed/255), but restoration to $original/255 was not verified. Check the display setting."
+            verified -> DiagnosticStatus.WARN to "Brightness change was read back ($observed/255), but restore was skipped; current value is ${finalValue ?: "unavailable"}/255."
+            restored && restoreVerified -> DiagnosticStatus.FAIL to "The requested brightness change did not verify; the original value $original/255 was separately restored and read back."
+            else -> DiagnosticStatus.WARN to "Brightness change was not verified. Before=$original, after=$observed, final=${finalValue ?: "unavailable"}; no restore success is claimed."
+        }
+        updateManualCheck("brightness", status, details)
+        finishActionTest("brightness", button, completed = true)
+    }
+
+    private fun handleFlashlightResult(button: Button, snapshot: DeviceActionSnapshot, result: ActionResult) {
+        val original = snapshot.flashlightEnabled ?: run {
+            updateManualCheck("flashlight", DiagnosticStatus.NOT_RUN, "The initial torch state was not observable; no restoration is claimed.")
+            finishActionTest("flashlight", button, completed = false)
+            return
+        }
+        val observed = DeviceStateReader.flashlightEnabled(this)
+        val target = true
+        val verified = result.status == ActionStatus.VERIFIED && observed == target
+        if (observed != null && observed != original) showFlashlightRestoreConfirmation(button, original, observed, verified)
+        else {
+            val status = if (verified) DiagnosticStatus.PASS else if (result.status == ActionStatus.FAILED) DiagnosticStatus.FAIL else DiagnosticStatus.WARN
+            updateManualCheck("flashlight", status, "Flashlight before=$original, requested=$target, torch-callback read-back=${observed ?: "unavailable"}; it was already at the original state or no change is claimed.")
+            finishActionTest("flashlight", button, completed = status != DiagnosticStatus.WARN)
+        }
+    }
+
+    private fun showFlashlightRestoreConfirmation(button: Button, original: Boolean, observed: Boolean, verified: Boolean) {
+        var handled = false
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Restore original flashlight state?")
+            .setMessage("Before: ${if (original) "on" else "off"}. After callback read-back: ${if (observed) "on" else "off"}. Confirm to set it back; otherwise the current light state remains.")
+            .setNegativeButton("Leave current state") { _, _ ->
+                handled = true
+                finishFlashlightTest(button, original, observed, verified, restored = false)
+            }
+            .setPositiveButton("Confirm restore") { _, _ ->
+                handled = true
+                restoreFlashlight(button, original, observed, verified)
+            }
+            .create()
+        dialog.setOnCancelListener { if (!handled) finishFlashlightTest(button, original, observed, verified, restored = false) }
+        dialog.show()
+    }
+
+    private fun restoreFlashlight(button: Button, original: Boolean, observed: Boolean, verified: Boolean) {
+        uiScope.launch {
+            if (DeviceStateReader.flashlightEnabled(this@DiagnosticsActivity) != observed) {
+                finishFlashlightTest(button, original, observed, verified, restored = false, externalChange = true)
+                return@launch
+            }
+            try {
+                val controller = (application as PocketMindApplication).agentController
+                val result = withContext(Dispatchers.IO) {
+                    controller.runConfirmedDiagnosticAction(PlanStep("flashlight", mapOf("enabled" to original)), userApproved = true)
+                }
+                val actual = DeviceStateReader.flashlightEnabled(this@DiagnosticsActivity)
+                finishFlashlightTest(button, original, observed, verified, restored = true, restoreVerified = result.status == ActionStatus.VERIFIED && actual == original)
+            } catch (_: Exception) {
+                finishFlashlightTest(button, original, observed, verified, restored = true, restoreVerified = false)
+            }
+        }
+    }
+
+    private fun finishFlashlightTest(button: Button, original: Boolean, observed: Boolean, verified: Boolean, restored: Boolean, restoreVerified: Boolean = false, externalChange: Boolean = false) {
+        val finalValue = DeviceStateReader.flashlightEnabled(this)
+        val (status, details) = when {
+            externalChange -> DiagnosticStatus.WARN to "Torch state changed externally; PocketMind did not overwrite it. Before=$original, action callback=$observed, final=${finalValue ?: "unavailable"}."
+            verified && restored && restoreVerified -> DiagnosticStatus.PASS to "Flashlight before=$original, after=$observed, restored=$finalValue; the tool callback and separate restore callback were verified."
+            verified && restored -> DiagnosticStatus.WARN to "Flashlight request was read back ($observed), but restoration to $original was not verified. Check the light state."
+            verified -> DiagnosticStatus.WARN to "Flashlight request was read back ($observed), but restore was skipped; current state is ${finalValue ?: "unavailable"}."
+            restored && restoreVerified -> DiagnosticStatus.FAIL to "The requested flashlight state did not verify; the original state $original was separately restored and read back."
+            else -> DiagnosticStatus.WARN to "Flashlight state was not verified. Before=$original, after=$observed, final=${finalValue ?: "unavailable"}; no restore success is claimed."
+        }
+        updateManualCheck("flashlight", status, details)
+        finishActionTest("flashlight", button, completed = true)
+    }
+
+    private fun completeExternalActionIfReady() {
+        val pending = pendingExternalAction ?: return
+        if (pending.activityPaused) pending.returnedToTester = true
+        if (pending.returnedToTester && pending.result != null) completeExternalAction(pending)
+    }
+
+    private fun completeExternalAction(pending: PendingExternalAction) {
+        if (pendingExternalAction !== pending) return
+        pendingExternalAction = null
+        val result = pending.result ?: return
+        val toolId = pending.toolId
+        val button = pending.button
+        when (toolId) {
+            "alarm.set" -> completeAlarmSet(pending)
+            "timer.set" -> completeTimerAction(pending, returnedToTester = true)
+            "alarm.dismiss" -> completeAlarmDismissal(pending)
+            else -> completeOrdinaryExternalAction(pending, result)
+        }
+    }
+
+    private fun completeOrdinaryExternalAction(pending: PendingExternalAction, result: ActionResult) {
+        val toolId = pending.toolId
+        val button = pending.button
+        if (result.status == ActionStatus.HANDED_OFF && pending.returnedToTester) {
+            val after = if (toolId.endsWith(".settings")) DeviceStateReader.settingsState(this, toolId) else "tester resumed after opening ${pending.step.args["package"]}"
+            val details = if (toolId.endsWith(".settings")) {
+                "Opened the Android ${toolId.removeSuffix(".settings")} settings screen and returned. State before=${pending.beforeState}; after=$after. PocketMind did not toggle or automatically restore anything; any change while the panel was open was user-controlled."
+            } else "The confirmed app.open request for ${pending.step.args["package"]} handed off and Tester resumed. Launch handoff was verified; the target app's internal behavior was not tested."
+            updateManualCheck(toolId, DiagnosticStatus.PASS, details)
+            finishActionTest(toolId, button, completed = true)
+        } else {
+            val status = if (result.status == ActionStatus.FAILED) DiagnosticStatus.FAIL else DiagnosticStatus.NOT_RUN
+            updateManualCheck(toolId, status, "Android did not provide a verified external-screen return (tool status ${result.status}); no change or app behavior is claimed.")
+            finishActionTest(toolId, button, completed = status == DiagnosticStatus.FAIL)
+        }
+    }
+
+    private fun completeAlarmSet(pending: PendingExternalAction) {
+        if (pendingExternalAction === pending) pendingExternalAction = null
+        val result = pending.result ?: return
+        val snapshot = pending.snapshot
+        val expected = snapshot.targetAlarmMillis
+        val observed = DeviceStateReader.nextAlarmClockTriggerMillis(this)
+        val matches = expected != null && observed != null && kotlin.math.abs(observed - expected) <= 90_000L && observed != snapshot.previousNextAlarmMillis
+        val noClockHandler = result.status == ActionStatus.FAILED && result.message.contains("No Clock app", true)
+        if (!noClockHandler && matches) {
+            showAlarmCleanupConfirmation(pending.button, snapshot, observed!!)
+            return
+        }
+        val status = if (noClockHandler) DiagnosticStatus.FAIL else DiagnosticStatus.NOT_RUN
+        val details = if (status == DiagnosticStatus.FAIL) {
+            "The confirmed request could not find a Clock handler, so Android did not receive the alarm. No alarm state is claimed."
+        } else {
+            "A real alarm request was sent after confirmation, but AlarmManager did not expose the selected time as a new next-alarm timestamp (status=${result.status}, read-back=${observed?.let(::formatAlarmTarget) ?: "none"}). This remains NOT_RUN; the alarm may still exist behind an earlier alarm. AlarmManager does not expose the label or ownership. Check Clock > Alarms for the requested label '${snapshot.alarmLabel}' and delete it if present. PocketMind did not claim cleanup."
+        }
+        updateManualCheck("alarm.set", status, details)
+        finishActionTest("alarm.set", pending.button, completed = true)
+    }
+
+    private fun showAlarmCleanupConfirmation(button: Button, snapshot: DeviceActionSnapshot, observed: Long) {
+        var handled = false
+        val label = snapshot.alarmLabel ?: "unknown test label"
+        val message = "AlarmManager's next-alarm timestamp matches ${formatAlarmTarget(observed)} after the labeled request. Android exposes the trigger time, not the alarm's label or ownership. The request included the unique label '$label'; the alarm remains scheduled and may ring. Clear by that label now? This is a separate action; if Android cannot verify the prior timestamp was restored, check Clock > Alarms and delete '$label' manually."
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Alarm set and read back")
+            .setMessage(message)
+            .setNegativeButton("Leave it scheduled") { _, _ ->
+                handled = true
+                updateManualCheck("alarm.set", DiagnosticStatus.WARN, "PASS for timestamp read-back: AlarmManager reports the next alarm at ${formatAlarmTarget(observed)} after the request with label '$label'. The API does not expose label/ownership. Cleanup was not approved; the alarm remains scheduled and may ring. To remove it, open Clock > Alarms and delete '$label'.")
+                finishActionTest("alarm.set", button, completed = true)
+            }
+            .setPositiveButton("Confirm clear test alarm") { _, _ ->
+                handled = true
+                dismissConfirmedTestAlarm(button, snapshot)
+            }
+            .create()
+        dialog.setOnCancelListener {
+            if (!handled) {
+                updateManualCheck("alarm.set", DiagnosticStatus.WARN, "PASS for timestamp read-back: AlarmManager reports the next alarm at ${formatAlarmTarget(observed)} after the request with label '$label'. The API does not expose label/ownership. Cleanup confirmation was cancelled; the alarm remains scheduled. Open Clock > Alarms and delete '$label'.")
+                finishActionTest("alarm.set", button, completed = true)
+            }
+        }
+        dialog.show()
+    }
+
+    private fun dismissConfirmedTestAlarm(button: Button, snapshot: DeviceActionSnapshot) {
+        val expected = snapshot.targetAlarmMillis
+        val label = snapshot.alarmLabel ?: ""
+        val current = DeviceStateReader.nextAlarmClockTriggerMillis(this)
+        if (expected == null || current == null || kotlin.math.abs(current - expected) > 90_000L) {
+            updateManualCheck("alarm.set", DiagnosticStatus.WARN, "The next-alarm read-back changed before cleanup, so PocketMind did not send a dismissal request. Check Clock > Alarms and delete '$label' if it is still present; no cleanup is claimed.")
+            finishActionTest("alarm.set", button, completed = true)
+            return
+        }
+        val step = PlanStep("alarm.dismiss", mapOf("label" to label))
+        val pending = PendingExternalAction("alarm.dismiss", step, button, snapshot, "before=${snapshot.previousNextAlarmMillis ?: "no next alarm"}")
+        pendingExternalAction = pending
+        uiScope.launch {
+            try {
+                val controller = (application as PocketMindApplication).agentController
+                val result = withContext(Dispatchers.IO) { controller.dismissDiagnosticAlarmByLabel(label, userApproved = true) }
+                pending.result = result
+                if (pending.returnedToTester) completeExternalAction(pending)
+                else window.decorView.postDelayed({
+                    if (pendingExternalAction === pending && !pending.activityPaused) completeExternalAction(pending)
+                }, 900L)
+            } catch (_: Exception) {
+                pendingExternalAction = null
+                updateManualCheck("alarm.set", DiagnosticStatus.WARN, "The separately confirmed label-scoped dismissal did not return a verifiable result. The alarm may remain; open Clock > Alarms and delete '$label'.")
+                finishActionTest("alarm.set", button, completed = true)
+            }
+        }
+    }
+
+    private fun completeAlarmDismissal(pending: PendingExternalAction) {
+        val result = pending.result ?: return
+        val snapshot = pending.snapshot
+        val observed = DeviceStateReader.nextAlarmClockTriggerMillis(this)
+        val restored = observed == snapshot.previousNextAlarmMillis
+        val label = snapshot.alarmLabel ?: "unknown test label"
+        val verified = result.status == ActionStatus.HANDED_OFF && restored
+        val details = if (verified) {
+            "PASS for timestamp restoration: after the separately confirmed label-scoped dismissal request, AlarmManager's next-alarm timestamp returned to the captured prior state (${if (observed == null) "no next alarm" else "prior next-alarm timestamp restored"}). Android does not expose alarm labels/ownership in this read-back; if the label '$label' still appears in Clock > Alarms, remove it there."
+        } else {
+            "The label-scoped dismissal was requested (${result.status}), but AlarmManager did not verify the previous next-alarm state (read-back=${observed?.let(::formatAlarmTarget) ?: "none"}). Cleanup is not claimed. Open Clock > Alarms and delete '$label' manually."
+        }
+        updateManualCheck("alarm.set", if (verified) DiagnosticStatus.PASS else DiagnosticStatus.WARN, details)
+        finishActionTest("alarm.set", pending.button, completed = true)
+    }
+
+    private fun completeTimerAction(pending: PendingExternalAction, returnedToTester: Boolean) {
+        if (pendingExternalAction === pending) pendingExternalAction = null
+        val result = pending.result ?: return
+        val seconds = (pending.step.args["seconds"] as? Number)?.toInt()
+        val failure = result.status == ActionStatus.FAILED && result.message.contains("No Clock app", true)
+        val status = if (failure) DiagnosticStatus.FAIL else DiagnosticStatus.NOT_RUN
+        val details = if (failure) {
+            "The confirmed request could not find a Clock handler; Android did not receive the timer."
+        } else {
+            "A real ${seconds ?: "unknown"}-second ACTION_SET_TIMER request was sent after confirmation${if (returnedToTester) " and Tester resumed" else ""}. Android's contract starts the timer, but PocketMind cannot read the running countdown or identify this timer for safe cancellation on API 30; verification is therefore user-assisted/NOT_RUN, not PASS. Check Clock > Timer; if this timer is running, tap Stop/Cancel. It may ring if left running."
+        }
+        updateManualCheck("timer.set", status, details)
+        finishActionTest("timer.set", pending.button, completed = true)
     }
 
     private fun updateManualCheck(toolId: String, status: DiagnosticStatus, details: String) {
@@ -634,9 +1121,19 @@ class DiagnosticsActivity : AppCompatActivity() {
 
     private fun finishActionTest(toolId: String, button: Button, completed: Boolean) {
         runningActionTests.remove(toolId)
+        if (activeDeviceActionToolId == toolId) {
+            activeDeviceActionToolId = null
+            activeRoutePrompt = null
+            activeExpectedRouteArgs = emptyMap()
+            actionSnapshot = null
+        }
         if (completed) completedActionTests.add(toolId)
         button.isEnabled = !completed
         if (completed) button.text = "${toolId} test completed"
+        if (report != null) {
+            runButton.isEnabled = true
+            shareButton.isEnabled = true
+        }
     }
 
     private fun statusColor(status: DiagnosticStatus): Int = when (status) {
@@ -699,6 +1196,19 @@ class DiagnosticsActivity : AppCompatActivity() {
             putExtra(Intent.EXTRA_TEXT, text)
         }
         startActivity(Intent.createChooser(share, "Share QA report"))
+    }
+
+    override fun onPause() {
+        pendingExternalAction?.activityPaused = true
+        super.onPause()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (pendingExternalAction?.activityPaused == true) {
+            pendingExternalAction?.returnedToTester = true
+            completeExternalActionIfReady()
+        }
     }
 
     override fun onDestroy() {

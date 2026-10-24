@@ -3,6 +3,7 @@ package com.pocketmind.diagnostics
 import com.pocketmind.tools.RuleEngine
 import com.pocketmind.tools.ToolRegistry
 import com.pocketmind.tools.ToolValidator
+import com.pocketmind.tools.TesterAlarmLabel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -37,5 +38,26 @@ class SyntheticFeatureRouteQaTest {
         assertFalse(SyntheticFeatureRouteQa.matches(volume, listOf(com.pocketmind.tools.PlanStep("brightness", mapOf("level" to 128)))))
         assertFalse(SyntheticFeatureRouteQa.matches(volume, listOf(com.pocketmind.tools.PlanStep("volume", mapOf("step" to -1)))))
         assertFalse(SyntheticFeatureRouteQa.matches(volume, listOf(com.pocketmind.tools.PlanStep("volume", mapOf("level" to 40)))))
+    }
+
+    @Test fun userSelectedAlarmAndTimerValuesSurviveTheRuleFirstChatRoute() {
+        val alarm = RuleEngine.match("Set alarm for 6:30 PM labeled pocketmind-qa-1234abcd")?.singleOrNull()
+        assertEquals("alarm.set", alarm?.tool)
+        assertEquals(18L, (alarm?.args?.get("hour") as? Number)?.toLong())
+        assertEquals(30L, (alarm?.args?.get("minute") as? Number)?.toLong())
+        assertEquals("pocketmind-qa-1234abcd", alarm?.args?.get("label"))
+        assertEquals(null, alarm?.let(ToolValidator()::validate))
+
+        val timer = RuleEngine.match("Set a timer for 17 minutes")?.singleOrNull()
+        assertEquals("timer.set", timer?.tool)
+        assertEquals(1020L, (timer?.args?.get("seconds") as? Number)?.toLong())
+        assertEquals(null, timer?.let(ToolValidator()::validate))
+    }
+
+    @Test fun generatedTesterAlarmLabelsAreAcceptedByTheExactLabelCleanupGuard() {
+        val label = TesterAlarmLabel.create()
+        assertTrue(label.startsWith("pocketmind-qa-"))
+        assertTrue(TesterAlarmLabel.isValid(label))
+        assertFalse(TesterAlarmLabel.isValid("user alarm"))
     }
 }

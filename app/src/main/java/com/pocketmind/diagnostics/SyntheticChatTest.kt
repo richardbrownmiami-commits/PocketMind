@@ -16,7 +16,8 @@ data class SyntheticChatTestResults(
     val qaStatus: DiagnosticStatus,
     val routeStatuses: Map<String, DiagnosticStatus>,
     val completed: Boolean,
-    val interrupted: Boolean = false
+    val interrupted: Boolean = false,
+    val actionRoutePlanJson: String? = null
 ) {
     companion object {
         fun notRun(toolIds: List<String>) = SyntheticChatTestResults(
@@ -39,4 +40,7 @@ internal object SyntheticChatTestContract {
     const val EXTRA_ROUTE_STATUSES = "com.pocketmind.qa.SYNTHETIC_CHAT_ROUTE_STATUSES"
     const val EXTRA_COMPLETED = "com.pocketmind.qa.SYNTHETIC_CHAT_COMPLETED"
     const val EXTRA_INTERRUPTED = "com.pocketmind.qa.SYNTHETIC_CHAT_INTERRUPTED"
+    const val EXTRA_ACTION_ROUTE_TOOL = "com.pocketmind.qa.ACTION_ROUTE_TOOL"
+    const val EXTRA_ACTION_ROUTE_PROMPT = "com.pocketmind.qa.ACTION_ROUTE_PROMPT"
+    const val EXTRA_ACTION_ROUTE_PLAN_JSON = "com.pocketmind.qa.ACTION_ROUTE_PLAN_JSON"
 }
