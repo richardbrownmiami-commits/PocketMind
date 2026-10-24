@@ -1,0 +1,13 @@
+.gradle/
+.idea/
+local.properties
+**/build/
+**/.cxx/
+**/.externalNativeBuild/
+*.iml
+vendor/
+models/
+*.gguf
+__pycache__/
+*.pyc
+.DS_Store
