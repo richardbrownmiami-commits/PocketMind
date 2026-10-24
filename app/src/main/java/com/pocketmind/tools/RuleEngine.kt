@@ -63,6 +63,17 @@ object SafeMath {
 }
 
 object RuleEngine {
+    fun clarification(text: String): String? {
+        val clean = text.trim().lowercase(Locale.ROOT)
+        if (Regex("^\\s*(how (?:do|can) i|what does|why did|explain|tell me how)\\b").containsMatchIn(clean)) return null
+        val asksForAlarm = Regex("\\b(?:set|create|add)\\s+(?:an?\\s+)?alarm\\b").containsMatchIn(clean)
+        val hasClockTime = Regex("\\b(?:at|for)\\s+\\d{1,2}:\\d{2}(?:\\s*(?:am|pm))?\\b").containsMatchIn(clean)
+        if (asksForAlarm && !hasClockTime) return "What time should I set the alarm for? Please include minutes and AM/PM, for example 6:30 pm."
+        val incompleteVolume = Regex("^(?:please\\s+)?(?:set|change|put)\\s+(?:the\\s+)?(?:(?:media|music)\\s+)?volume[?.!]*$").matches(clean)
+        if (incompleteVolume) return "What media volume level should I use, from 0 to 100 percent?"
+        return null
+    }
+
     fun match(text: String): List<PlanStep>? {
         val clean = text.lowercase(Locale.ROOT).trim()
         if (Regex("\\b(don't|do not|dont|never|cancel|no)\\b.*\\b(alarm|timer|flashlight|torch|note)\\b").containsMatchIn(clean)) return emptyList()
@@ -104,6 +115,22 @@ object RuleEngine {
 
         if (clean.contains("turn on flashlight") || clean.contains("turn on torch")) return listOf(PlanStep("flashlight", mapOf("enabled" to true)))
         if (clean.contains("turn off flashlight") || clean.contains("turn off torch")) return listOf(PlanStep("flashlight", mapOf("enabled" to false)))
+
+        val volume = Regex("^(?:(?:please|can you|could you)\\s+)?(set|raise|increase|turn up|lower|decrease|turn down)\\s+(?:the\\s+)?(?:(?:media|music)\\s+)?volume(?:\\s+(?:(?:to|at)\\s+)?(\\d{1,3})\\s*(?:%|percent)?)?(?:[,\\s]+please)?[?.!]*$").find(clean)
+        if (volume != null) {
+            val verb = volume.groupValues[1]
+            val level = volume.groupValues[2].toIntOrNull()
+            if (level != null) {
+                if (level !in 0..100) return null
+                return listOf(PlanStep("volume", mapOf("level" to level)))
+            }
+            val step = when (verb) {
+                "raise", "increase", "turn up" -> 1
+                "lower", "decrease", "turn down" -> -1
+                else -> return null
+            }
+            return listOf(PlanStep("volume", mapOf("step" to step)))
+        }
 
         if (Regex("\\b(calculate|compute|what is)\\b").containsMatchIn(clean)) {
             val expression = clean.substringAfter("calculate", clean.substringAfter("compute", clean.substringAfter("what is", ""))).trim().trimEnd('?')

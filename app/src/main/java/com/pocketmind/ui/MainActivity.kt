@@ -5,6 +5,7 @@ import android.graphics.Color
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
@@ -18,6 +19,11 @@ import androidx.recyclerview.widget.RecyclerView
 import com.pocketmind.PocketMindApplication
 import com.pocketmind.core.AgentReply
 import com.pocketmind.core.GenerationService
+import com.pocketmind.diagnostics.DiagnosticStatus
+import com.pocketmind.diagnostics.SyntheticChatTestContract
+import com.pocketmind.diagnostics.SyntheticFeatureRouteQa
+import com.pocketmind.diagnostics.SyntheticModelQa
+import com.pocketmind.tools.ToolValidator
 import com.pocketmind.memory.AppDatabase
 import com.pocketmind.memory.MessageStore
 import kotlinx.coroutines.CoroutineScope
@@ -36,13 +42,26 @@ class MainActivity : AppCompatActivity() {
     private lateinit var input: EditText
     private lateinit var send: Button
     private lateinit var stop: Button
+    private lateinit var testerButton: Button
     private val handler = Handler(Looper.getMainLooper())
+    private var syntheticChatMode = false
+    private var syntheticStopRequested = false
+    private var syntheticFinished = false
+    private var syntheticResultIntent: Intent? = null
+    private var syntheticModelLoadedAtStart = false
+    private var syntheticQaStatus = DiagnosticStatus.NOT_RUN
+    private val syntheticRouteStatuses = linkedMapOf<String, DiagnosticStatus>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        syntheticChatMode = intent.getBooleanExtra(SyntheticChatTestContract.EXTRA_RUN, false)
         buildView()
         status.text = controller.status()
-        loadHistory()
+        if (syntheticChatMode) {
+            if (savedInstanceState?.getBoolean(STATE_SYNTHETIC_QA_ENTERED, false) == true) {
+                restoreSyntheticChatSession(savedInstanceState)
+            } else runSyntheticChatQa()
+        } else loadHistory()
     }
 
     private fun loadHistory() {
@@ -66,18 +85,31 @@ class MainActivity : AppCompatActivity() {
         val nav = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         nav.addView(Button(this).apply {
             text = "Models"
+            isEnabled = !syntheticChatMode
             setOnClickListener { startActivity(Intent(this@MainActivity, ModelsActivity::class.java)) }
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         nav.addView(Button(this).apply {
             text = "Memory"
+            isEnabled = !syntheticChatMode
             setOnClickListener { startActivity(Intent(this@MainActivity, MemoryActivity::class.java)) }
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         root.addView(nav)
-        root.addView(Button(this).apply {
+        testerButton = Button(this).apply {
             text = "Tester · Run all feature tests"
             contentDescription = "Open the all-feature PocketMind tester"
-            setOnClickListener { startActivity(Intent(this@MainActivity, DiagnosticsActivity::class.java)) }
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            setOnClickListener {
+                if (syntheticChatMode) {
+                    if (syntheticFinished) returnToTesterReport()
+                    else {
+                        syntheticStopRequested = true
+                        controller.stop()
+                        text = "Stopping synthetic QA…"
+                        isEnabled = false
+                    }
+                } else startActivity(Intent(this@MainActivity, DiagnosticsActivity::class.java))
+            }
+        }
+        root.addView(testerButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             bottomMargin = 6
         })
         status = TextView(this).apply {
@@ -111,10 +143,146 @@ class MainActivity : AppCompatActivity() {
         stop = Button(this).apply {
             text = "Stop generation"
             isEnabled = false
-            setOnClickListener { controller.stop(); status.text = "Stopping generation…" }
+            setOnClickListener {
+                if (syntheticChatMode) syntheticStopRequested = true
+                controller.stop()
+                status.text = "Stopping generation…"
+            }
         }
         root.addView(stop)
         setContentView(root)
+    }
+
+    private fun runSyntheticChatQa() {
+        input.visibility = View.GONE
+        send.visibility = View.GONE
+        send.isEnabled = false
+        stop.text = "Stop synthetic QA"
+        stop.isEnabled = true
+        testerButton.text = "Stop and return to Tester"
+        testerButton.contentDescription = "Stop the transient synthetic QA session"
+        testerButton.isEnabled = true
+        stop.setOnClickListener {
+            syntheticStopRequested = true
+            controller.stop()
+            stop.isEnabled = false
+            testerButton.isEnabled = false
+            status.text = "Stopping the transient QA session… no device action is being run."
+        }
+        status.text = "Synthetic QA is being asked in Chat. These temporary turns are visible here but are not saved to history, memory, notes, or action logs. Feature actions are only routed; none are executed."
+        syntheticModelLoadedAtStart = false
+        syntheticQaStatus = DiagnosticStatus.NOT_RUN
+        syntheticRouteStatuses.clear()
+        var completed = false
+        uiScope.launch {
+            val syntheticTurns = mutableListOf<String>()
+            var qaChecked = 0
+            var qaFailed = false
+            try {
+                syntheticModelLoadedAtStart = controller.syntheticChatModelAvailable()
+                for (probe in SyntheticModelQa.probes) {
+                    if (syntheticStopRequested) break
+                    val answer = appendSyntheticChatTurn(probe.prompt, syntheticTurns)
+                    if (syntheticStopRequested) break
+                    if (answer.modelLoaded) {
+                        qaChecked++
+                        if (!SyntheticModelQa.responseContainsExpectedAnswer(answer.text, probe.expectedAnswer)) qaFailed = true
+                    }
+                }
+                syntheticQaStatus = when {
+                    !syntheticModelLoadedAtStart || syntheticStopRequested || qaChecked != SyntheticModelQa.probes.size -> DiagnosticStatus.NOT_RUN
+                    qaFailed -> DiagnosticStatus.FAIL
+                    else -> DiagnosticStatus.PASS
+                }
+                for (probe in SyntheticFeatureRouteQa.probes) {
+                    if (syntheticStopRequested) break
+                    val answer = appendSyntheticChatTurn(probe.prompt, syntheticTurns)
+                    if (syntheticStopRequested) {
+                        syntheticRouteStatuses[probe.toolId] = DiagnosticStatus.NOT_RUN
+                        break
+                    }
+                    syntheticRouteStatuses[probe.toolId] = when {
+                        answer.plan != null && SyntheticFeatureRouteQa.matches(probe, answer.plan, ToolValidator()) -> DiagnosticStatus.PASS
+                        answer.plan == null && !answer.modelLoaded -> DiagnosticStatus.NOT_RUN
+                        else -> DiagnosticStatus.FAIL
+                    }
+                }
+                completed = !syntheticStopRequested
+            } catch (_: Exception) {
+                completed = false
+            } finally {
+                syntheticResultIntent = buildSyntheticResultIntent(completed, interrupted = false)
+                syntheticFinished = true
+                stop.isEnabled = false
+                testerButton.text = "Return to Tester report"
+                testerButton.contentDescription = "Return to the all-feature QA report"
+                testerButton.isEnabled = true
+                testerButton.setOnClickListener { returnToTesterReport() }
+                status.text = if (completed) "Synthetic Chat QA is complete. The displayed turns were temporary and not saved; tap Return to Tester report to review the results."
+                else "Synthetic Chat QA stopped early. Completed checks are retained only as statuses; displayed turns were not saved. Tap Return to Tester report."
+            }
+        }
+    }
+
+    private fun buildSyntheticResultIntent(completed: Boolean, interrupted: Boolean): Intent {
+        val routeIds = SyntheticFeatureRouteQa.probes.map { it.toolId }
+        return Intent()
+            .putExtra(SyntheticChatTestContract.EXTRA_STARTED, true)
+            .putExtra(SyntheticChatTestContract.EXTRA_MODEL_LOADED, syntheticModelLoadedAtStart)
+            .putExtra(SyntheticChatTestContract.EXTRA_QA_STATUS, syntheticQaStatus.name)
+            .putExtra(SyntheticChatTestContract.EXTRA_COMPLETED, completed)
+            .putExtra(SyntheticChatTestContract.EXTRA_INTERRUPTED, interrupted)
+            .putStringArrayListExtra(SyntheticChatTestContract.EXTRA_ROUTE_IDS, ArrayList(routeIds))
+            .putStringArrayListExtra(SyntheticChatTestContract.EXTRA_ROUTE_STATUSES,
+                ArrayList(routeIds.map { (syntheticRouteStatuses[it] ?: DiagnosticStatus.NOT_RUN).name }))
+    }
+
+    private fun restoreSyntheticChatSession(state: Bundle) {
+        input.visibility = View.GONE
+        send.visibility = View.GONE
+        send.isEnabled = false
+        stop.text = "Stop synthetic QA"
+        stop.isEnabled = false
+        syntheticFinished = true
+        syntheticModelLoadedAtStart = state.getBoolean(STATE_MODEL_LOADED, false)
+        syntheticQaStatus = runCatching {
+            DiagnosticStatus.valueOf(state.getString(STATE_QA_STATUS) ?: DiagnosticStatus.NOT_RUN.name)
+        }.getOrDefault(DiagnosticStatus.NOT_RUN)
+        val ids = state.getStringArrayList(STATE_ROUTE_IDS).orEmpty()
+        val statuses = state.getStringArrayList(STATE_ROUTE_STATUSES).orEmpty()
+        syntheticRouteStatuses.clear()
+        ids.zip(statuses).forEach { (id, value) ->
+            runCatching { syntheticRouteStatuses[id] = DiagnosticStatus.valueOf(value) }
+        }
+        val hadResult = state.getBoolean(STATE_HAS_RESULT, false)
+        val completed = hadResult && state.getBoolean(STATE_RESULT_COMPLETED, false)
+        val interrupted = !hadResult || state.getBoolean(STATE_RESULT_INTERRUPTED, false)
+        syntheticResultIntent = buildSyntheticResultIntent(completed, interrupted)
+        testerButton.text = "Return to Tester report"
+        testerButton.contentDescription = "Return to the all-feature QA report"
+        testerButton.setOnClickListener { returnToTesterReport() }
+        status.text = when {
+            completed -> "Synthetic QA completed before this screen was recreated. Sanitized statuses were restored; the temporary chat transcript was not saved. Tap Return to Tester report."
+            interrupted -> "Chat was recreated while synthetic QA was in progress. It will not repeat prompts; completed statuses were restored and unfinished checks remain NOT_RUN. Tap Return to Tester report."
+            else -> "Synthetic QA was stopped before this screen was recreated. Its transcript was not saved and the remaining checks will not be repeated. Tap Return to Tester report."
+        }
+    }
+
+    private suspend fun appendSyntheticChatTurn(prompt: String, turns: MutableList<String>): com.pocketmind.diagnostics.SyntheticChatTurnResult {
+        adapter.add("user", prompt)
+        val answerRow = adapter.add("assistant", "")
+        scrollToBottom()
+        val result = controller.askSyntheticChat(prompt, turns)
+        adapter.update(answerRow, result.text)
+        turns += "user: ${prompt.take(1000)}"
+        turns += "assistant: ${result.text.take(3000)}"
+        scrollToBottom()
+        return result
+    }
+
+    private fun returnToTesterReport() {
+        setResult(RESULT_OK, syntheticResultIntent ?: Intent())
+        finish()
     }
 
     private fun submit() {
@@ -125,6 +293,7 @@ class MainActivity : AppCompatActivity() {
         val answerRow = adapter.add("assistant", "")
         scrollToBottom()
         send.isEnabled = false
+        testerButton.isEnabled = false
         stop.isEnabled = true
         status.text = "Working on device…"
         try { ContextCompat.startForegroundService(this, Intent(this, GenerationService::class.java).setAction(GenerationService.ACTION_START)) }
@@ -143,6 +312,7 @@ class MainActivity : AppCompatActivity() {
                 status.text = controller.status()
             } finally {
                 send.isEnabled = true
+                testerButton.isEnabled = true
                 stop.isEnabled = false
                 stopService(Intent(this@MainActivity, GenerationService::class.java))
                 scrollToBottom()
@@ -152,6 +322,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun askForConfirmation(reply: AgentReply, row: Int) {
         val pending = reply.actions.filter { it.status.name == "PENDING_CONFIRMATION" }
+        val confirmationId = reply.confirmationId ?: return
         if (pending.isEmpty()) return
         val names = pending.joinToString("\n") { "• ${it.tool}: ${it.args}" }
         AlertDialog.Builder(this)
@@ -159,8 +330,9 @@ class MainActivity : AppCompatActivity() {
             .setMessage("PocketMind wants to run:\n$names\n\nContinue?")
             .setPositiveButton("Run") { _, _ ->
                 uiScope.launch {
-                    val results = controller.confirmPending(true)
-                    val text = results.joinToString("\n") { "${it.tool}: ${it.status} — ${it.message}" }
+                    val results = controller.confirmPending(confirmationId, true)
+                    val text = if (results.isEmpty()) "This confirmation expired or was already used; nothing was run."
+                    else results.joinToString("\n") { "${it.tool}: ${it.status} — ${it.message}" }
                     adapter.update(row, listOf(reply.text, text).filter { it.isNotBlank() }.joinToString("\n"))
                     status.text = controller.status()
                     scrollToBottom()
@@ -168,8 +340,9 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton("Cancel") { _, _ ->
                 uiScope.launch {
-                    val results = controller.confirmPending(false)
-                    val text = results.joinToString("\n") { "${it.tool}: ${it.status} — ${it.message}" }
+                    val results = controller.confirmPending(confirmationId, false)
+                    val text = if (results.isEmpty()) "This confirmation expired or was already used; nothing was run."
+                    else results.joinToString("\n") { "${it.tool}: ${it.status} — ${it.message}" }
                     adapter.update(row, listOf(reply.text, text).filter { it.isNotBlank() }.joinToString("\n"))
                     scrollToBottom()
                 }
@@ -183,11 +356,56 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (::status.isInitialized) { status.text = controller.status(); loadHistory() }
+        if (::status.isInitialized && !syntheticChatMode) { status.text = controller.status(); loadHistory() }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        if (syntheticChatMode) {
+            outState.putBoolean(STATE_SYNTHETIC_QA_ENTERED, true)
+            outState.putBoolean(STATE_MODEL_LOADED, syntheticModelLoadedAtStart)
+            outState.putString(STATE_QA_STATUS, syntheticQaStatus.name)
+            val routeIds = SyntheticFeatureRouteQa.probes.map { it.toolId }
+            outState.putStringArrayList(STATE_ROUTE_IDS, ArrayList(routeIds))
+            outState.putStringArrayList(STATE_ROUTE_STATUSES,
+                ArrayList(routeIds.map { (syntheticRouteStatuses[it] ?: DiagnosticStatus.NOT_RUN).name }))
+            val result = syntheticResultIntent
+            outState.putBoolean(STATE_HAS_RESULT, result != null)
+            if (result != null) {
+                outState.putBoolean(STATE_RESULT_COMPLETED, result.getBooleanExtra(SyntheticChatTestContract.EXTRA_COMPLETED, false))
+                outState.putBoolean(STATE_RESULT_INTERRUPTED, result.getBooleanExtra(SyntheticChatTestContract.EXTRA_INTERRUPTED, false))
+            }
+        }
+        super.onSaveInstanceState(outState)
+    }
+
+    @Deprecated("Deprecated in Android, kept to return the QA result to the Tester Activity")
+    override fun onBackPressed() {
+        if (!syntheticChatMode) {
+            super.onBackPressed()
+            return
+        }
+        if (syntheticFinished) returnToTesterReport()
+        else {
+            syntheticStopRequested = true
+            controller.stop()
+            status.text = "Stopping the transient QA session…"
+        }
     }
 
     override fun onDestroy() {
+        if (syntheticChatMode && !syntheticFinished) controller.stop()
         uiScope.cancel()
         super.onDestroy()
+    }
+
+    private companion object {
+        const val STATE_SYNTHETIC_QA_ENTERED = "pocketmind.syntheticQa.entered"
+        const val STATE_MODEL_LOADED = "pocketmind.syntheticQa.modelLoaded"
+        const val STATE_QA_STATUS = "pocketmind.syntheticQa.qaStatus"
+        const val STATE_ROUTE_IDS = "pocketmind.syntheticQa.routeIds"
+        const val STATE_ROUTE_STATUSES = "pocketmind.syntheticQa.routeStatuses"
+        const val STATE_HAS_RESULT = "pocketmind.syntheticQa.hasResult"
+        const val STATE_RESULT_COMPLETED = "pocketmind.syntheticQa.resultCompleted"
+        const val STATE_RESULT_INTERRUPTED = "pocketmind.syntheticQa.resultInterrupted"
     }
 }

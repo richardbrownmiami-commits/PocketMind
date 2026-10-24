@@ -25,6 +25,20 @@ class ToolsTest {
         assertEquals("note.save", RuleEngine.match("remember to call mom")!!.single().tool)
     }
 
+    @Test fun volumeCommandsRouteToRelativeOrAbsoluteActionAndAskForMissingTargets() {
+        assertEquals(PlanStep("volume", mapOf("step" to 1)), RuleEngine.match("Raise the media volume" )!!.single())
+        assertEquals(PlanStep("volume", mapOf("step" to -1)), RuleEngine.match("Could you turn down the volume, please?")!!.single())
+        assertEquals(PlanStep("volume", mapOf("level" to 40)), RuleEngine.match("Set volume to 40%")!!.single())
+        assertNull(RuleEngine.match("Set media volume"))
+        assertTrue(RuleEngine.clarification("Set media volume")!!.contains("0 to 100"))
+    }
+
+    @Test fun incompleteAlarmRequestsClarificationButInformationalQuestionsDoNot() {
+        assertTrue(RuleEngine.clarification("Set an alarm")!!.contains("What time"))
+        assertNull(RuleEngine.clarification("How do I set an alarm?"))
+        assertNull(RuleEngine.clarification("Set an alarm for 6:30 pm"))
+    }
+
     @Test fun strictPlannerRejectsGarbageAndUnknownFields() {
         assertEquals(listOf(PlanStep("clock.time", emptyMap())), PlannerJson.parse("{\"steps\":[{\"tool\":\"clock.time\",\"args\":{}}]}"))
         assertTrue(PlannerJson.parse("{\"steps\":[]}").isEmpty())
@@ -40,5 +54,10 @@ class ToolsTest {
         assertNotNull(validator.validatePlan(List(9) { PlanStep("clock.time", emptyMap()) }))
         assertNull(validator.validate(PlanStep("clock.time", emptyMap())))
         assertNull(validator.validate(PlanStep("alarm.set", mapOf("hour" to 6L, "minute" to 30L))))
+        assertNull(validator.validate(PlanStep("volume", mapOf("level" to 50))))
+        assertNull(validator.validate(PlanStep("volume", mapOf("step" to 1))))
+        assertNotNull(validator.validate(PlanStep("volume", emptyMap())))
+        assertNotNull(validator.validate(PlanStep("volume", mapOf("level" to 50, "step" to 1))))
+        assertNotNull(validator.validate(PlanStep("volume", mapOf("step" to 0))))
     }
 }

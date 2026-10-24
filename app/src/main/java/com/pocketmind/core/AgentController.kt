@@ -3,7 +3,12 @@ package com.pocketmind.core
 import android.content.Context
 import com.pocketmind.engine.LlamaEngine
 import com.pocketmind.engine.ModelStore
+import com.pocketmind.diagnostics.DiagnosticStatus
+import com.pocketmind.diagnostics.SyntheticFeatureRouteProbe
+import com.pocketmind.diagnostics.SyntheticFeatureRouteQa
+import com.pocketmind.diagnostics.SyntheticFeatureRouteResult
 import com.pocketmind.diagnostics.SyntheticModelQa
+import com.pocketmind.diagnostics.SyntheticChatTurnResult
 import com.pocketmind.memory.ActionLogStore
 import com.pocketmind.memory.AppDatabase
 import com.pocketmind.memory.FactStore
@@ -27,10 +32,50 @@ import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
 import java.io.Closeable
+import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
- data class AgentReply(val text: String, val actions: List<ActionResult> = emptyList())
+data class AgentReply(
+    val text: String,
+    val actions: List<ActionResult> = emptyList(),
+    val confirmationId: String? = null
+)
+
+/** Opaque, one-use, expiring handle for the exact plan shown in a confirmation dialog. */
+internal class ConfirmationLedger(private val elapsedMillis: () -> Long = { System.nanoTime() / 1_000_000L }) {
+    private data class Entry(val steps: List<PlanStep>, val createdAt: Long)
+    private val entries = linkedMapOf<String, Entry>()
+
+    fun issue(steps: List<PlanStep>): String {
+        prune()
+        while (entries.size >= MAX_PENDING) entries.remove(entries.keys.first())
+        val id = UUID.randomUUID().toString()
+        entries[id] = Entry(steps.toList(), elapsedMillis())
+        return id
+    }
+
+    fun consume(id: String): List<PlanStep>? {
+        val entry = entries.remove(id) ?: return null
+        val age = elapsedMillis() - entry.createdAt
+        return entry.steps.takeIf { age >= 0L && age <= TTL_MS }
+    }
+
+    fun clear() = entries.clear()
+
+    private fun prune() {
+        val now = elapsedMillis()
+        entries.entries.removeAll {
+            val age = now - it.value.createdAt
+            age < 0L || age > TTL_MS
+        }
+    }
+
+    private companion object {
+        const val MAX_PENDING = 8
+        const val TTL_MS = 5 * 60 * 1000L
+    }
+}
 
 /** Deterministic native-token budgeter. It never truncates or drops the current question. */
 object PromptBudget {
@@ -120,7 +165,7 @@ class AgentController(context: Context) : Closeable {
     private val engine = LlamaEngine()
     @Volatile private var loadedPath: String? = null
     private var contextSize = 512
-    private var pending: List<PlanStep> = emptyList()
+    private val pending = ConfirmationLedger()
     private val closed = AtomicBoolean(false)
 
     suspend fun send(text: String, onToken: (String) -> Unit = {}): AgentReply = withContext(dispatcher) {
@@ -173,12 +218,19 @@ class AgentController(context: Context) : Closeable {
                 messages.append("assistant", answer)
                 return@withContext AgentReply(answer)
             }
-            val results = executeOrHold(rule)
-            val answer = renderActions(results)
+            val execution = executeOrHold(rule)
+            val answer = renderActions(execution.results)
             val assistantId = messages.append("assistant", answer)
             indexRecall(assistantId, answer)
-            updateTopic(raw, results)
-            return@withContext AgentReply(answer, results)
+            updateTopic(raw, execution.results)
+            return@withContext AgentReply(answer, execution.results, execution.confirmationId)
+        }
+
+        val clarification = RuleEngine.clarification(raw)
+        if (clarification != null) {
+            messages.append("user", raw)
+            messages.append("assistant", clarification)
+            return@withContext AgentReply(clarification)
         }
 
         val modelPath = ModelStore(app).selected()?.absolutePath
@@ -191,28 +243,14 @@ class AgentController(context: Context) : Closeable {
         val userId = messages.append("user", raw)
         indexRecall(userId, raw)
 
-        val relevantTools = registry.relevant(resolved, 5)
-        var plan: List<PlanStep>? = null
-        if (relevantTools.isNotEmpty() && looksLikeAction(raw)) {
-            val planText = generateOrNull(plannerPrompt(resolved, relevantTools), 160, ACTION_GRAMMAR, {})
-            if (planText != null) {
-                try {
-                    val parsed = PlannerJson.parse(planText)
-                    if (parsed.isNotEmpty() && validator.validatePlan(parsed) == null && parsed.all { step -> relevantTools.any { it.id == step.tool } }) {
-                        plan = parsed
-                    }
-                } catch (_: Exception) {
-                    // Untrusted or malformed output is rejected; no tool is run.
-                }
-            }
-        }
+        val plan = createActionPlan(resolved, raw)
         if (plan != null) {
-            val results = executeOrHold(plan!!)
-            val answer = renderActions(results)
+            val execution = executeOrHold(plan)
+            val answer = renderActions(execution.results)
             val assistantId = messages.append("assistant", answer)
             indexRecall(assistantId, answer)
-            updateTopic(raw, results)
-            return@withContext AgentReply(answer, results)
+            updateTopic(raw, execution.results)
+            return@withContext AgentReply(answer, execution.results, execution.confirmationId)
         }
 
         val currentRecall = if (preferences.getBoolean("recall_enabled", true)) recall.recall(resolved, userId).take(2).map { it.text }.let { capChars(it, 700) } else emptyList()
@@ -236,11 +274,9 @@ class AgentController(context: Context) : Closeable {
         AgentReply(response)
     }
 
-    suspend fun confirmPending(approved: Boolean): List<ActionResult> = withContext(dispatcher) {
+    suspend fun confirmPending(confirmationId: String, approved: Boolean): List<ActionResult> = withContext(dispatcher) {
         ensureOpen()
-        val steps = pending
-        pending = emptyList()
-        if (steps.isEmpty()) return@withContext emptyList()
+        val steps = pending.consume(confirmationId) ?: return@withContext emptyList()
         if (!approved) {
             return@withContext steps.map { step ->
                 val result = ActionResult(step.tool, ActionStatus.CANCELLED, "Not approved; nothing was run.", step.args)
@@ -248,7 +284,12 @@ class AgentController(context: Context) : Closeable {
                 result
             }
         }
-        ToolRuntime(app, registry, validator).execute(steps, steps.map { it.tool }.toSet())
+        val runtime = ToolRuntime(app, registry, validator)
+        try {
+            runtime.execute(steps, steps.map { it.tool }.toSet())
+        } finally {
+            runtime.close()
+        }
     }
 
     suspend fun loadSelectedModel(): String = withContext(dispatcher) {
@@ -290,35 +331,134 @@ class AgentController(context: Context) : Closeable {
     /** Checks fixed synthetic answers on the existing model queue without storing or logging prompts/outputs. */
     suspend fun runLoadedModelQaDiagnostic(): String = withContext(dispatcher) {
         ensureOpen()
-        if (loadedPath == null) return@withContext "NOT_RUN: No model is loaded. Load a compatible GGUF model in Models and rerun the synthetic Q&A check."
+        if (loadedPath == null || ModelStore(app).selected() == null) return@withContext "NOT_RUN: No model is loaded or selected for chat. Load a compatible GGUF model in Models and rerun the synthetic Q&A check."
         try {
-            val matches = SyntheticModelQa.probes.count { probe ->
-                val generated = engine.generate(probe.prompt, maxTokens = 24).trim()
-                SyntheticModelQa.responseContainsExpectedAnswer(generated, probe.expectedAnswer)
+            val turns = mutableListOf<String>()
+            var matches = 0
+            for (probe in SyntheticModelQa.probes) {
+                val response = syntheticChatTurnLocked(probe.prompt, turns, {}).text
+                if (SyntheticModelQa.responseContainsExpectedAnswer(response, probe.expectedAnswer)) matches++
+                turns += "user: ${probe.prompt}"
+                turns += "assistant: $response"
             }
             if (matches == SyntheticModelQa.probes.size) {
-                "PASS: Expected answer content matched for ${SyntheticModelQa.probes.size} fixed synthetic prompts."
+                "PASS: Expected answer content matched for ${SyntheticModelQa.probes.size} fixed synthetic chat turns."
             } else {
-                "FAIL: Expected answer content did not match for one or more fixed synthetic prompts."
+                "FAIL: Expected answer content did not match for one or more fixed synthetic chat turns."
             }
         } catch (error: Throwable) {
             "FAIL: Local synthetic Q&A generation failed (${error.javaClass.simpleName})."
         }
     }
 
-    private fun executeOrHold(steps: List<PlanStep>): List<ActionResult> {
+    /** One disposable chat request; only synthetic turns supplied by the caller can enter its in-memory context. */
+    internal suspend fun askSyntheticChat(
+        text: String,
+        recentSyntheticTurns: List<String> = emptyList(),
+        onToken: (String) -> Unit = {}
+    ): SyntheticChatTurnResult = withContext(dispatcher) {
+        ensureOpen()
+        syntheticChatTurnLocked(text, recentSyntheticTurns, onToken)
+    }
+
+    internal suspend fun syntheticChatModelAvailable(): Boolean = withContext(dispatcher) {
+        loadedPath != null && ModelStore(app).selected() != null
+    }
+
+    private fun syntheticChatTurnLocked(text: String, turns: List<String>, onToken: (String) -> Unit): SyntheticChatTurnResult {
+        val raw = text.trim()
+        if (raw.isEmpty()) return SyntheticChatTurnResult("Please enter a message.", null, loadedPath != null)
+        val rule = RuleEngine.match(raw)
+        if (rule != null) {
+            val reply = if (rule.isEmpty()) "I would not take that action. No action was executed."
+                else "Synthetic route: ${rule.joinToString { it.tool }}. No action was executed or saved."
+            return SyntheticChatTurnResult(reply, rule, loadedPath != null)
+        }
+        RuleEngine.clarification(raw)?.let { answer ->
+            return SyntheticChatTurnResult(answer, emptyList(), loadedPath != null)
+        }
+        if (ModelStore(app).selected() == null || loadedPath == null) {
+            return SyntheticChatTurnResult("No model is loaded. This synthetic chat turn was not run.", null, false)
+        }
+        val actionRequest = looksLikeAction(raw)
+        val plan = createActionPlan(raw)
+        if (plan != null) {
+            val reply = "Synthetic route: ${plan.joinToString { it.tool }}. No action was executed or saved."
+            return SyntheticChatTurnResult(reply, plan, true)
+        }
+        if (actionRequest) {
+            return SyntheticChatTurnResult("I couldn't create a safe action plan for this synthetic request. Nothing was executed.", emptyList(), true)
+        }
+        val prompt = try {
+            PromptBudget.fit(
+                PromptBudget.Inputs(raw, emptyList(), null, emptyList(), turns.takeLast(8)),
+                contextSize - ANSWER_TOKENS,
+                engine::countTokens
+            ).prompt
+        } catch (_: Exception) {
+            return SyntheticChatTurnResult("That question is too long for the available model context.", null, true)
+        }
+        val response = generateOrNull(prompt, ANSWER_TOKENS, null, onToken)
+        return SyntheticChatTurnResult(response ?: "Generation was stopped or failed.", null, true)
+    }
+
+    /** Uses the same rule-first and local planner path as chat, but never writes synthetic turns or executes a plan. */
+    internal suspend fun runFeatureRouteDiagnostic(probe: SyntheticFeatureRouteProbe): SyntheticFeatureRouteResult = withContext(dispatcher) {
+        ensureOpen()
+        try {
+            val chatTurn = syntheticChatTurnLocked(probe.prompt, emptyList(), {})
+            val planned = chatTurn.plan ?: return@withContext SyntheticFeatureRouteResult(
+                if (chatTurn.modelLoaded) DiagnosticStatus.FAIL else DiagnosticStatus.NOT_RUN
+            )
+            val passed = SyntheticFeatureRouteQa.matches(probe, planned, validator)
+            SyntheticFeatureRouteResult(if (passed) DiagnosticStatus.PASS else DiagnosticStatus.FAIL,
+                planned.singleOrNull()?.takeIf { passed })
+        } catch (_: Throwable) {
+            SyntheticFeatureRouteResult(DiagnosticStatus.FAIL)
+        }
+    }
+
+    /** Executes only a risk-bearing synthetic QA step after the caller's separate in-app confirmation. */
+    internal suspend fun runConfirmedDiagnosticAction(step: PlanStep, userApproved: Boolean): ActionResult = withContext(dispatcher) {
+        ensureOpen()
+        val spec = registry.get(step.tool)
+        if (spec == null || spec.risk == RiskLevel.LOW) {
+            return@withContext ActionResult(step.tool, ActionStatus.FAILED, "This confirmed-action tester accepts only registered state-changing tools.", step.args)
+        }
+        val runtime = ToolRuntime(app, registry, validator)
+        try {
+            runtime.execute(listOf(step), if (userApproved) setOf(step.tool) else emptySet()).single()
+        } finally {
+            runtime.close()
+        }
+    }
+
+    /** Exact volume restore is a separate action and therefore has its own explicit confirmation. */
+    internal suspend fun restoreDiagnosticVolumeIndex(index: Int, userApproved: Boolean): ActionResult = withContext(dispatcher) {
+        ensureOpen()
+        val runtime = ToolRuntime(app, registry, validator)
+        try {
+            runtime.restoreMediaVolumeIndex(index, userApproved)
+        } finally {
+            runtime.close()
+        }
+    }
+
+    private data class ActionExecution(val results: List<ActionResult>, val confirmationId: String? = null)
+
+    private fun executeOrHold(steps: List<PlanStep>): ActionExecution {
         val invalid = validator.validatePlan(steps)
-        if (invalid != null) return steps.map { ActionResult(it.tool, ActionStatus.FAILED, invalid, it.args) }
+        if (invalid != null) return ActionExecution(steps.map { ActionResult(it.tool, ActionStatus.FAILED, invalid, it.args) })
         val lowRisk = steps.filter { registry.get(it.tool)?.risk == RiskLevel.LOW }
         val needsApproval = steps.filter { registry.get(it.tool)?.risk != RiskLevel.LOW }
         val immediate = if (lowRisk.isEmpty()) emptyList() else ToolRuntime(app, registry, validator).execute(lowRisk)
-        if (needsApproval.isEmpty()) return immediate
-        pending = needsApproval
+        if (needsApproval.isEmpty()) return ActionExecution(immediate)
+        val confirmationId = pending.issue(needsApproval)
         val waiting = needsApproval.map { step ->
             actionLog.record(step.tool, step.tool, step.args.toString(), ActionStatus.PENDING_CONFIRMATION.name, "Waiting for explicit user approval.")
             ActionResult(step.tool, ActionStatus.PENDING_CONFIRMATION, "Confirm before PocketMind runs this action.", step.args)
         }
-        return immediate + waiting
+        return ActionExecution(immediate + waiting, confirmationId)
     }
 
     private fun renderActions(results: List<ActionResult>): String {
@@ -343,10 +483,21 @@ class AgentController(context: Context) : Closeable {
         append("User request: ").append(question).append("\nJSON:")
     }
 
+    private fun createActionPlan(question: String, actionIntentText: String = question): List<PlanStep>? {
+        val relevantTools = registry.relevant(question, 5)
+        if (relevantTools.isEmpty() || !looksLikeAction(actionIntentText)) return null
+        val planText = generateOrNull(plannerPrompt(question, relevantTools), 160, ACTION_GRAMMAR, {}) ?: return null
+        val parsed = try { PlannerJson.parse(planText) } catch (_: Exception) { return null }
+        return parsed.takeIf {
+            it.isNotEmpty() && validator.validatePlan(it) == null &&
+                it.all { step -> relevantTools.any { tool -> tool.id == step.tool } }
+        }
+    }
+
     private fun looksLikeAction(text: String): Boolean {
         val clean = text.trim()
         if (Regex("(?i)^(how (?:do|can) i|what does|why did|explain|tell me how)\\b").containsMatchIn(clean)) return false
-        val verb = "(?:set|start|turn on|turn off|open|launch|change|save|create|adjust|enable|disable|switch|search for|find|check|show|list)"
+        val verb = "(?:set|start|turn on|turn off|open|launch|change|save|create|adjust|enable|disable|switch|raise|lower|increase|decrease|turn up|turn down|search for|find|check|show|list)"
         return Regex("(?i)^(?:please\\s+)?$verb\\b").containsMatchIn(clean) ||
             Regex("(?i)\\b(?:can you|could you|please)\\s+$verb\\b").containsMatchIn(clean)
     }
@@ -385,13 +536,14 @@ class AgentController(context: Context) : Closeable {
     private fun unloadInternal() {
         if (loadedPath != null) try { engine.unload() } catch (_: Throwable) { }
         loadedPath = null
-        pending = emptyList()
+        pending.clear()
     }
 
     private fun ensureOpen() = check(!closed.get()) { "Agent controller is closed" }
 
     override fun close() {
         if (closed.compareAndSet(false, true)) {
+            pending.clear()
             stop()
             dispatcher.close()
             db.close()

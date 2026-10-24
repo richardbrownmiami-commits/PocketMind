@@ -19,7 +19,7 @@ class DiagnosticReportTest {
 
         val noFailures = failure.copy(checks = listOf(DiagnosticCheck("safe", DiagnosticStatus.PASS, "ok"),
             DiagnosticCheck("manual", DiagnosticStatus.NOT_RUN, "safe")))
-        assertTrue(noFailures.summary().contains("1 action(s) were intentionally not run"))
+        assertTrue(noFailures.summary().contains("1 check(s) remain not run"))
     }
 
     @Test fun shareTextHasDeviceChecksAndPrivacyNotice() {
@@ -31,6 +31,7 @@ class DiagnosticReportTest {
         assertTrue(text.contains("Redmi 9"))
         assertTrue(text.contains("[PASS] Offline permission policy"))
         assertTrue(text.contains("not sent automatically"))
+        assertTrue(text.contains("Only explicitly confirmed device actions"))
         assertFalse(text.contains("conversation transcript"))
     }
 }

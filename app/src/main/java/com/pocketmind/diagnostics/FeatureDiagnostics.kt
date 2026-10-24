@@ -83,8 +83,8 @@ data class DiagnosticReport(
 
     fun summary(): String = when {
         failures > 0 -> "$failures issue(s) failed checks. Read each failed log for the likely cause and next step."
-        warnings > 0 -> "No safe test failed; $warnings item(s) need attention or are preflight-only. $notRun action(s) were intentionally not run."
-        notRun > 0 -> "Safe tests passed; $notRun action(s) were intentionally not run; real device changes were intentionally not triggered."
+        warnings > 0 -> "No check failed; $warnings item(s) need attention or are preflight-only. $notRun check(s) remain not run; review the individual results."
+        notRun > 0 -> "$notRun check(s) remain not run. Review model-dependent routes and any device-action tests awaiting confirmation or skipped."
         else -> "All checks passed."
     }
 
@@ -103,7 +103,7 @@ data class DiagnosticReport(
             appendLine(check.details)
             appendLine()
         }
-        appendLine("Privacy: runs offline on this device. Test records use temporary databases that are deleted after the run. This report excludes chat, note, and fact contents and is not sent automatically.")
+        appendLine("Privacy: runs offline on this device. Synthetic prompts and generated text are not saved to chat, memory, notes, logs, or this report. Only explicitly confirmed device actions write their tool IDs, arguments, and results to local action history. Automatic checks use temporary databases; this report excludes chat, note, and fact contents and is not sent automatically.")
     }
 }
 
@@ -115,6 +115,7 @@ object FeatureDiagnostics {
         context: Context,
         controller: AgentController,
         initialUiChecks: List<DiagnosticCheck> = emptyList(),
+        syntheticChatResults: SyntheticChatTestResults? = null,
         onProgress: suspend (DiagnosticProgress) -> Unit = {}
     ): DiagnosticReport {
         val app = context.applicationContext
@@ -137,6 +138,17 @@ object FeatureDiagnostics {
         tasks += Task("Models · imported/selected model readiness") { checkModelState(app) }
         tasks += Task("Runtime · Android memory status is read-only") { checkMemoryPressure(app) }
         tasks += Task("UI · all four app screens are registered") { checkScreens(app) }
+        tasks += Task("UI · synthetic QA turns shown in Chat") {
+            val result = syntheticChatResults
+            when {
+                result?.completed == true -> DiagnosticCheck("UI · synthetic QA turns shown in Chat", DiagnosticStatus.PASS,
+                    "The fixed QA questions and feature requests were shown as temporary user/assistant turns on the Chat screen. They were not saved.")
+                result == null -> DiagnosticCheck("UI · synthetic QA turns shown in Chat", DiagnosticStatus.NOT_RUN,
+                    "This tester invocation did not launch the synthetic Chat session; no prompts or responses were saved.")
+                else -> DiagnosticCheck("UI · synthetic QA turns shown in Chat", DiagnosticStatus.NOT_RUN,
+                    "The Chat-screen synthetic QA session was cancelled or stopped before completion. Its temporary turns were not saved.")
+            }
+        }
 
         tasks += Task("Rules · alarm parsing and 12-hour conversion") {
             val parsed = RuleEngine.match("Set alarm 6:30 pm")?.singleOrNull()
@@ -284,9 +296,9 @@ object FeatureDiagnostics {
                     "The runtime requested confirmation and did not execute this state-changing action.",
                     "The tool did not stop at the approval gate; observed status was ${result?.status ?: "no result"}.")
             }
-            tasks += Task("Device action · ${spec.id} not triggered") {
-                DiagnosticCheck("Device action · ${spec.id} not triggered", DiagnosticStatus.NOT_RUN,
-                "A real ${spec.id} action can change the phone or leave another screen open. Diagnostics verified its confirmation gate and intentionally did not perform it.")
+            tasks += Task("Device action · ${spec.id} test") {
+                DiagnosticCheck("Device action · ${spec.id} test", DiagnosticStatus.NOT_RUN,
+                "Not performed by the automatic run. Use the action-test control for a preview; this real action requires a separate in-app confirmation. Skipping leaves it unrun.")
             }
         }
 
@@ -311,7 +323,26 @@ object FeatureDiagnostics {
         tasks += capabilityTask("Airplane settings handler", app, Intent(Settings.ACTION_AIRPLANE_MODE_SETTINGS), "airplane.settings")
         tasks += capabilityTask("Location settings handler", app, Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS), "location.settings")
         tasks += Task("Model · loaded local generation smoke test") { checkLoadedModel(controller) }
-        tasks += Task("Model · loaded local synthetic Q&A correctness") { checkLoadedModelQa(controller) }
+        tasks += Task("Model · loaded local synthetic Q&A correctness") {
+            syntheticChatResults?.let(::checkSyntheticChatQa) ?: checkLoadedModelQa(controller)
+        }
+        SyntheticFeatureRouteQa.probes.forEach { probe ->
+            tasks += Task("Feature routing · ${probe.toolId}") {
+                syntheticChatResults?.let { checkSyntheticChatRoute(probe, it) } ?: checkFeatureRoute(controller, probe)
+            }
+        }
+        tasks += Task("Input routing · incomplete alarm asks for a time") {
+            val answer = RuleEngine.clarification("Set an alarm")
+            outcome("Input routing · incomplete alarm asks for a time", answer?.contains("What time", ignoreCase = true) == true,
+                "The assistant asks for the missing alarm time; no alarm is scheduled.",
+                "The incomplete alarm request did not produce a time clarification; no alarm is scheduled.")
+        }
+        tasks += Task("Input routing · incomplete absolute volume asks for a level") {
+            val answer = RuleEngine.clarification("Set media volume")
+            outcome("Input routing · incomplete absolute volume asks for a level", answer?.contains("0 to 100", ignoreCase = true) == true,
+                "The assistant asks for a media-volume target; no volume is changed.",
+                "The incomplete absolute-volume request did not produce a target clarification; no volume is changed.")
+        }
 
         try {
             val total = tasks.size
@@ -559,6 +590,55 @@ object FeatureDiagnostics {
 
     private suspend fun checkLoadedModelQa(controller: AgentController): DiagnosticCheck {
         return SyntheticModelQa.asDiagnosticCheck(controller.runLoadedModelQaDiagnostic())
+    }
+
+    private fun checkSyntheticChatQa(results: SyntheticChatTestResults): DiagnosticCheck {
+        val status = results.qaStatus
+        val details = when (status) {
+            DiagnosticStatus.PASS -> "Both fixed natural-language questions were asked in the transient Chat screen and their answers matched. Synthetic turns were not saved."
+            DiagnosticStatus.FAIL -> "One or more visible synthetic Chat answers missed the expected content. Prompts and responses were not saved or included in this report."
+            DiagnosticStatus.NOT_RUN -> if (!results.sessionStarted)
+                "The transient Chat QA session did not start or return a result; no prompts or responses were saved."
+            else if (results.interrupted)
+                "Chat was recreated before all synthetic questions completed. The tester did not repeat them; unfinished checks remain NOT_RUN and only prior statuses were retained."
+            else if (!results.modelLoaded)
+                "No loaded local model was available in Chat, so synthetic Q&A was not run. Load a compatible model and rerun."
+            else "The Chat-screen QA session stopped before all fixed questions could be checked; unfinished prompts remain NOT_RUN."
+            DiagnosticStatus.WARN -> "The synthetic Chat Q&A could not be fully verified; no prompt or response was retained."
+        }
+        return DiagnosticCheck("Model · loaded local synthetic Q&A correctness", status, details)
+    }
+
+    private fun checkSyntheticChatRoute(probe: SyntheticFeatureRouteProbe, results: SyntheticChatTestResults): DiagnosticCheck {
+        val status = results.routeStatuses[probe.toolId] ?: DiagnosticStatus.NOT_RUN
+        val details = when (status) {
+            DiagnosticStatus.PASS -> "The fixed synthetic request and response were shown in the transient Chat screen; the expected feature and validated arguments matched. No action was executed or saved."
+            DiagnosticStatus.FAIL -> "The Chat-screen request did not produce the expected feature and valid arguments. No action was executed, and prompt/response text was not retained."
+            DiagnosticStatus.NOT_RUN -> if (!results.sessionStarted)
+                "The transient Chat QA session did not start or return a result. No action was executed."
+            else if (results.interrupted)
+                "Chat was recreated before this feature route completed. The prompt was not repeated; this route remains NOT_RUN and no action was executed."
+            else if (!results.modelLoaded)
+                "No loaded local model was available for this Chat-screen planner route. Deterministic rules may still pass; no action was executed."
+            else "The Chat-screen test stopped before this route was checked; no action was executed."
+            DiagnosticStatus.WARN -> "The synthetic Chat route could not be fully verified. No action was executed, and prompt/response text was not retained."
+        }
+        return DiagnosticCheck("Feature routing · ${probe.toolId}", status, details)
+    }
+
+    private suspend fun checkFeatureRoute(controller: AgentController, probe: SyntheticFeatureRouteProbe): DiagnosticCheck {
+        val title = "Feature routing · ${probe.toolId}"
+        val result = controller.runFeatureRouteDiagnostic(probe)
+        return when (result.status) {
+            DiagnosticStatus.PASS -> DiagnosticCheck(title, DiagnosticStatus.PASS,
+                "A fixed synthetic request reached the expected feature with valid arguments. The proposed plan was not executed, saved, or included in the report.")
+            DiagnosticStatus.FAIL -> DiagnosticCheck(title, DiagnosticStatus.FAIL,
+                "The rule-first/local-model route did not produce the expected feature and valid arguments. No action was executed and prompt/answer text was not retained.")
+            DiagnosticStatus.NOT_RUN -> DiagnosticCheck(title, DiagnosticStatus.NOT_RUN,
+                "A local model is required for this planner route and none is loaded. No action was executed and prompt/answer text was not retained.")
+            DiagnosticStatus.WARN -> DiagnosticCheck(title, DiagnosticStatus.WARN,
+                "The synthetic feature route could not be fully verified. No action was executed and prompt/answer text was not retained.")
+        }
     }
 
     private fun sampleStep(spec: ToolSpec, marker: String, appPackage: String): PlanStep = PlanStep(spec.id, when (spec.id) {

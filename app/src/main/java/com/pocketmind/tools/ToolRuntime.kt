@@ -24,6 +24,16 @@ import java.time.format.DateTimeFormatter
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
+/** A failed side effect may already have happened; never replay it automatically. */
+internal object ToolExecutionRetryPolicy {
+    private val retrySafeTools = setOf(
+        "clock.time", "clock.date", "math.calculate", "note.list", "note.search",
+        "battery/status", "app.search"
+    )
+
+    fun maximumAttempts(step: PlanStep): Int = if (step.tool in retrySafeTools) 3 else 1
+}
+
 class ToolRuntime(
     private val context: Context,
     private val registry: ToolRegistry = ToolRegistry(),
@@ -50,9 +60,10 @@ class ToolRuntime(
                 return@map finish(step, ActionStatus.PENDING_CONFIRMATION, "Explicit approval is required before this action.")
             }
             var result = perform(step)
-            var retries = 0
-            while (result.status == ActionStatus.FAILED && retries < 2) {
-                retries++
+            var attempts = 1
+            val maximumAttempts = ToolExecutionRetryPolicy.maximumAttempts(step)
+            while (result.status == ActionStatus.FAILED && attempts < maximumAttempts) {
+                attempts++
                 result = perform(step)
             }
             finish(step, result.status, result.message)
@@ -93,7 +104,7 @@ class ToolRuntime(
                 "alarm.set" -> setAlarm(step)
                 "timer.set" -> setTimer(step)
                 "flashlight" -> setTorch(step, a["enabled"] as Boolean)
-                "volume" -> setVolume(step, (a["level"] as Number).toInt())
+                "volume" -> setVolume(step)
                 "brightness" -> setBrightness(step, (a["level"] as Number).toInt())
                 "battery/status" -> batteryStatus(step)
                 "app.open" -> openApp(step, a["package"] as String)
@@ -157,13 +168,41 @@ class ToolRuntime(
         else handoff(step, "Android accepted the torch request, but its callback did not confirm the state.")
     }
 
-    private fun setVolume(step: PlanStep, percent: Int): ActionResult {
+    private fun setVolume(step: PlanStep): ActionResult {
         val audio = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-        val target = (percent * max / 100.0).toInt().coerceIn(0, max)
+        val current = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
+        val relativeStep = (step.args["step"] as? Number)?.toInt()
+        val target = if (relativeStep != null) (current + relativeStep).coerceIn(0, max)
+            else (((step.args["level"] as Number).toInt()) * max / 100.0).toInt().coerceIn(0, max)
         audio.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
         val actual = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
-        return if (actual == target) verified(step, "Media volume set to $percent% (verified).") else failed(step, "Volume read-back did not match; Do Not Disturb or device policy may block it.")
+        val success = when {
+            actual != target -> "Volume read-back did not match; Do Not Disturb or device policy may block it."
+            relativeStep == 1 && target == current -> "Media volume was already at its maximum; no change was needed."
+            relativeStep == -1 && target == current -> "Media volume was already at its minimum; no change was needed."
+            relativeStep == 1 -> "Media volume raised by one step and verified."
+            relativeStep == -1 -> "Media volume lowered by one step and verified."
+            else -> "Media volume set to ${step.args["level"]}% and verified."
+        }
+        return if (actual == target) verified(step, success) else failed(step, success)
+    }
+
+    /** Restores an exact Android stream index only after the caller's separate confirmation. */
+    fun restoreMediaVolumeIndex(index: Int, approved: Boolean): ActionResult {
+        val step = PlanStep("volume", mapOf("index" to index))
+        if (!approved) return finish(step, ActionStatus.PENDING_CONFIRMATION, "Explicit approval is required before restoring the volume.")
+        return try {
+            val audio = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            if (index !in 0..max) return finish(step, ActionStatus.FAILED, "Original volume index is no longer valid.")
+            audio.setStreamVolume(AudioManager.STREAM_MUSIC, index, 0)
+            val actual = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
+            if (actual == index) finish(step, ActionStatus.VERIFIED, "Original media volume restored and verified.")
+            else finish(step, ActionStatus.FAILED, "Original media volume could not be restored by read-back.")
+        } catch (error: Exception) {
+            finish(step, ActionStatus.FAILED, error.message?.take(160) ?: "Volume restore failed.")
+        }
     }
 
     private fun setBrightness(step: PlanStep, level: Int): ActionResult {

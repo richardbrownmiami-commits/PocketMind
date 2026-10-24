@@ -6,11 +6,11 @@ internal data class SyntheticQaProbe(val prompt: String, val expectedAnswer: Str
 internal object SyntheticModelQa {
     val probes = listOf(
         SyntheticQaProbe(
-            "Synthetic offline QA. Answer only with a number. What is 17 + 25?",
-            "42"
+            "What color is grass?",
+            "green"
         ),
         SyntheticQaProbe(
-            "Synthetic offline QA. Answer only with the city name. What is the capital of France?",
+            "What is the capital of France?",
             "Paris"
         )
     )

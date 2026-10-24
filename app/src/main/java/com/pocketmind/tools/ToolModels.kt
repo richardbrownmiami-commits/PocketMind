@@ -33,7 +33,7 @@ class ToolRegistry(val all: List<ToolSpec> = defaults) {
             ToolSpec("alarm.set", "Set an alarm", listOf(ArgSpec("hour", ArgType.INTEGER), ArgSpec("minute", ArgType.INTEGER), ArgSpec("label", ArgType.STRING, false)), RiskLevel.HIGH),
             ToolSpec("timer.set", "Start a timer", listOf(ArgSpec("seconds", ArgType.INTEGER)), RiskLevel.MEDIUM),
             ToolSpec("flashlight", "Turn flashlight on or off", listOf(ArgSpec("enabled", ArgType.BOOLEAN)), RiskLevel.MEDIUM),
-            ToolSpec("volume", "Change media volume", listOf(ArgSpec("level", ArgType.INTEGER)), RiskLevel.MEDIUM), ToolSpec("brightness", "Change display brightness", listOf(ArgSpec("level", ArgType.INTEGER)), RiskLevel.HIGH),
+            ToolSpec("volume", "Set media volume to a percentage or adjust it one step", listOf(ArgSpec("level", ArgType.INTEGER, false), ArgSpec("step", ArgType.INTEGER, false)), RiskLevel.MEDIUM), ToolSpec("brightness", "Change display brightness", listOf(ArgSpec("level", ArgType.INTEGER)), RiskLevel.HIGH),
             ToolSpec("battery/status", "Read battery, RAM and storage status", emptyList(), RiskLevel.LOW), ToolSpec("app.open", "Open an installed application", listOf(ArgSpec("package", ArgType.STRING)), RiskLevel.HIGH), ToolSpec("app.search", "Search installed applications", listOf(ArgSpec("query", ArgType.STRING)), RiskLevel.LOW),
             ToolSpec("wifi.settings", "Open Wi-Fi settings", emptyList(), RiskLevel.MEDIUM), ToolSpec("bluetooth.settings", "Open Bluetooth settings", emptyList(), RiskLevel.MEDIUM), ToolSpec("airplane.settings", "Open airplane mode settings", emptyList(), RiskLevel.MEDIUM), ToolSpec("location.settings", "Open location settings", emptyList(), RiskLevel.MEDIUM)
         )
@@ -60,7 +60,13 @@ class ToolValidator(private val registry: ToolRegistry = ToolRegistry()) {
         }
         if (step.tool == "alarm.set" && (((step.args["hour"] as Number).toLong() !in 0L..23L) || ((step.args["minute"] as Number).toLong() !in 0L..59L))) return "Alarm time out of range"
         if (step.tool == "timer.set" && ((step.args["seconds"] as Number).toLong() !in 1L..86400L)) return "Timer seconds out of range"
-        if (step.tool == "volume" && ((step.args["level"] as Number).toLong() !in 0L..100L)) return "Volume level out of range"
+        if (step.tool == "volume") {
+            val hasLevel = step.args.containsKey("level")
+            val hasStep = step.args.containsKey("step")
+            if (hasLevel == hasStep) return "Provide exactly one of level or step"
+            if (hasLevel && ((step.args["level"] as Number).toLong() !in 0L..100L)) return "Volume level out of range"
+            if (hasStep && ((step.args["step"] as Number).toLong() !in -1L..1L || (step.args["step"] as Number).toLong() == 0L)) return "Volume step must be -1 or 1"
+        }
         if (step.tool == "brightness" && ((step.args["level"] as Number).toLong() !in 0L..255L)) return "Brightness level out of range"
         if (step.tool == "app.open" && !((step.args["package"] as String).matches(Regex("[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+")))) return "Invalid package name"
         return null
