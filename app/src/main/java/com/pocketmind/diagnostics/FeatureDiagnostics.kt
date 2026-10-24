@@ -83,8 +83,8 @@ data class DiagnosticReport(
 
     fun summary(): String = when {
         failures > 0 -> "$failures issue(s) failed checks. Read each failed log for the likely cause and next step."
-        warnings > 0 -> "No safe test failed; $warnings item(s) need attention or are preflight-only."
-        notRun > 0 -> "Safe tests passed; $notRun real-device action(s) were intentionally not triggered."
+        warnings > 0 -> "No safe test failed; $warnings item(s) need attention or are preflight-only. $notRun action(s) were intentionally not run."
+        notRun > 0 -> "Safe tests passed; $notRun action(s) were intentionally not run; real device changes were intentionally not triggered."
         else -> "All checks passed."
     }
 
