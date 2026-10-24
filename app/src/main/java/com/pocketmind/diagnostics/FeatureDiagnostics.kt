@@ -311,6 +311,7 @@ object FeatureDiagnostics {
         tasks += capabilityTask("Airplane settings handler", app, Intent(Settings.ACTION_AIRPLANE_MODE_SETTINGS), "airplane.settings")
         tasks += capabilityTask("Location settings handler", app, Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS), "location.settings")
         tasks += Task("Model · loaded local generation smoke test") { checkLoadedModel(controller) }
+        tasks += Task("Model · loaded local synthetic Q&A correctness") { checkLoadedModelQa(controller) }
 
         try {
             val total = tasks.size
@@ -554,6 +555,10 @@ object FeatureDiagnostics {
             else -> DiagnosticCheck("Model · loaded local generation smoke test", DiagnosticStatus.NOT_RUN,
                 "No model is loaded, so inference was not run. Load a compatible local GGUF model and rerun to test generation.")
         }
+    }
+
+    private suspend fun checkLoadedModelQa(controller: AgentController): DiagnosticCheck {
+        return SyntheticModelQa.asDiagnosticCheck(controller.runLoadedModelQaDiagnostic())
     }
 
     private fun sampleStep(spec: ToolSpec, marker: String, appPackage: String): PlanStep = PlanStep(spec.id, when (spec.id) {

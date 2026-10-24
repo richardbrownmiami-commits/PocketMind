@@ -3,6 +3,7 @@ package com.pocketmind.core
 import android.content.Context
 import com.pocketmind.engine.LlamaEngine
 import com.pocketmind.engine.ModelStore
+import com.pocketmind.diagnostics.SyntheticModelQa
 import com.pocketmind.memory.ActionLogStore
 import com.pocketmind.memory.AppDatabase
 import com.pocketmind.memory.FactStore
@@ -283,6 +284,25 @@ class AgentController(context: Context) : Closeable {
             else "PASS: The already-loaded model generated text. Nothing was added to chat history or sent off-device."
         } catch (e: Throwable) {
             "FAIL: Local inference threw ${e.javaClass.simpleName}: ${e.message?.replace(Regex("[\\r\\n]+"), " ")?.take(120).orEmpty()}. Android may still reclaim the app under system memory pressure; try a smaller model if the OS terminates it."
+        }
+    }
+
+    /** Checks fixed synthetic answers on the existing model queue without storing or logging prompts/outputs. */
+    suspend fun runLoadedModelQaDiagnostic(): String = withContext(dispatcher) {
+        ensureOpen()
+        if (loadedPath == null) return@withContext "NOT_RUN: No model is loaded. Load a compatible GGUF model in Models and rerun the synthetic Q&A check."
+        try {
+            val matches = SyntheticModelQa.probes.count { probe ->
+                val generated = engine.generate(probe.prompt, maxTokens = 24).trim()
+                SyntheticModelQa.responseContainsExpectedAnswer(generated, probe.expectedAnswer)
+            }
+            if (matches == SyntheticModelQa.probes.size) {
+                "PASS: Expected answer content matched for ${SyntheticModelQa.probes.size} fixed synthetic prompts."
+            } else {
+                "FAIL: Expected answer content did not match for one or more fixed synthetic prompts."
+            }
+        } catch (error: Throwable) {
+            "FAIL: Local synthetic Q&A generation failed (${error.javaClass.simpleName})."
         }
     }
 
