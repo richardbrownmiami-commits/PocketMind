@@ -27,12 +27,18 @@ import java.util.concurrent.TimeUnit
 class ToolRuntime(
     private val context: Context,
     private val registry: ToolRegistry = ToolRegistry(),
-    private val validator: ToolValidator = ToolValidator(registry)
+    private val validator: ToolValidator = ToolValidator(registry),
+    databaseName: String = "pocketmind_memory.db"
 ) {
     private val app = context.applicationContext
-    private val database by lazy { AppDatabase(app) }
+    private val databaseDelegate = lazy { AppDatabase(app, databaseName) }
+    private val database by databaseDelegate
     private val notes by lazy { NoteStore(database) }
     private val actions by lazy { ActionLogStore(database) }
+
+    fun close() {
+        if (databaseDelegate.isInitialized()) database.close()
+    }
 
     fun execute(steps: List<PlanStep>, approved: Set<String> = emptySet()): List<ActionResult> {
         if (steps.size > 8) return listOf(ActionResult("", ActionStatus.FAILED, "Plan exceeds 8 steps"))

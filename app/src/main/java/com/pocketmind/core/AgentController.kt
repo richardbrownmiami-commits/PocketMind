@@ -1,8 +1,6 @@
 package com.pocketmind.core
 
-import android.app.ActivityManager
 import android.content.Context
-import android.os.SystemClock
 import com.pocketmind.engine.LlamaEngine
 import com.pocketmind.engine.ModelStore
 import com.pocketmind.memory.ActionLogStore
@@ -24,14 +22,8 @@ import com.pocketmind.tools.ToolRegistry
 import com.pocketmind.tools.ToolRuntime
 import com.pocketmind.tools.ToolSpec
 import com.pocketmind.tools.ToolValidator
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.Closeable
 import java.util.concurrent.Executors
@@ -114,7 +106,6 @@ class AgentController(context: Context) : Closeable {
     private val dispatcher: ExecutorCoroutineDispatcher = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "PocketMind-model-queue")
     }.asCoroutineDispatcher()
-    private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val db = AppDatabase(app)
     private val messages = MessageStore(db)
     private val topics = TopicStateStore(db)
@@ -128,14 +119,11 @@ class AgentController(context: Context) : Closeable {
     private val engine = LlamaEngine()
     @Volatile private var loadedPath: String? = null
     private var contextSize = 512
-    private var lastUsed = SystemClock.elapsedRealtime()
     private var pending: List<PlanStep> = emptyList()
-    private var idleUnloadJob: Job? = null
     private val closed = AtomicBoolean(false)
 
     suspend fun send(text: String, onToken: (String) -> Unit = {}): AgentReply = withContext(dispatcher) {
         ensureOpen()
-        unloadIfIdle()
         val raw = text.trim()
         if (raw.isEmpty()) return@withContext AgentReply("Please enter a message.")
 
@@ -244,7 +232,6 @@ class AgentController(context: Context) : Closeable {
         indexRecall(assistantId, response)
         rollSummary()
         updateTopic(raw, emptyList())
-        touchModel()
         AgentReply(response)
     }
 
@@ -266,17 +253,14 @@ class AgentController(context: Context) : Closeable {
     suspend fun loadSelectedModel(): String = withContext(dispatcher) {
         ensureOpen()
         val file = ModelStore(app).selected() ?: return@withContext "No model is selected. Import a GGUF file first."
-        val memory = memoryInfo()
-        if (memory.availMem < MIN_FREE_BYTES) return@withContext "Not enough free memory to load safely. Close other apps and try again."
         if (loadedPath == file.absolutePath) return@withContext "Model is already loaded."
         unloadInternal()
-        val requestedContext = if (memory.availMem >= AMPLE_FREE_BYTES) 1024 else 512
+        val requestedContext = DEFAULT_CONTEXT
         val threads = Runtime.getRuntime().availableProcessors().coerceIn(1, 4).coerceAtMost(DEFAULT_THREADS)
         return@withContext try {
             engine.load(file.absolutePath, nCtx = requestedContext, nBatch = minOf(256, requestedContext), nUbatch = 128, threads = threads)
             loadedPath = file.absolutePath
             contextSize = requestedContext
-            touchModel()
             "Model loaded (${requestedContext}-token context, $threads threads)."
         } catch (e: Throwable) {
             loadedPath = null
@@ -287,7 +271,20 @@ class AgentController(context: Context) : Closeable {
     suspend fun unload(): String = withContext(dispatcher) { unloadInternal(); "Model unloaded." }
     fun stop() { try { engine.cancel() } catch (_: Throwable) { } }
     fun status(): String = if (loadedPath == null) "No model loaded" else "Model loaded · context $contextSize"
-    fun trimMemory() { stop(); scope.launch { unloadInternal() } }
+
+    /** Runs a tiny prompt on the existing model queue without storing a chat turn or changing tools/state. */
+    suspend fun runLoadedModelDiagnostic(): String = withContext(dispatcher) {
+        ensureOpen()
+        if (loadedPath == null) return@withContext "NOT_RUN: No model is loaded. Load one in Models to test local text generation."
+        try {
+            val prompt = "You are checking local text generation. Reply with one short word only.\nUser question: Say READY.\nAssistant:"
+            val generated = engine.generate(prompt, maxTokens = 8).trim()
+            if (generated.isBlank()) "FAIL: The loaded model returned no text. Check the selected GGUF file and native runtime."
+            else "PASS: The already-loaded model generated text. Nothing was added to chat history or sent off-device."
+        } catch (e: Throwable) {
+            "FAIL: Local inference threw ${e.javaClass.simpleName}: ${e.message?.replace(Regex("[\\r\\n]+"), " ")?.take(120).orEmpty()}. Android may still reclaim the app under system memory pressure; try a smaller model if the OS terminates it."
+        }
+    }
 
     private fun executeOrHold(steps: List<PlanStep>): List<ActionResult> {
         val invalid = validator.validatePlan(steps)
@@ -335,9 +332,9 @@ class AgentController(context: Context) : Closeable {
     }
 
     private fun generateOrNull(prompt: String, maxTokens: Int, grammar: String?, sink: (String) -> Unit): String? {
-        if (memoryInfo().availMem < MIN_FREE_BYTES || loadedPath == null) return null
+        if (loadedPath == null) return null
         return try {
-            engine.generate(prompt, maxTokens, grammar, sink).trim().takeIf { it.isNotEmpty() }.also { touchModel() }
+            engine.generate(prompt, maxTokens, grammar, sink).trim().takeIf { it.isNotEmpty() }
         } catch (_: Throwable) {
             null
         }
@@ -365,29 +362,10 @@ class AgentController(context: Context) : Closeable {
         return values.mapNotNull { value -> value.take(remaining).also { remaining -= it.length }.takeIf { it.isNotEmpty() } }
     }
 
-    private fun touchModel() {
-        lastUsed = SystemClock.elapsedRealtime()
-        idleUnloadJob?.cancel()
-        idleUnloadJob = scope.launch {
-            delay(IDLE_UNLOAD_MS)
-            if (loadedPath != null && SystemClock.elapsedRealtime() - lastUsed >= IDLE_UNLOAD_MS) unloadInternal()
-        }
-    }
-
-    private fun unloadIfIdle() {
-        if (loadedPath != null && SystemClock.elapsedRealtime() - lastUsed >= IDLE_UNLOAD_MS) unloadInternal()
-    }
-
     private fun unloadInternal() {
-        idleUnloadJob?.cancel()
-        idleUnloadJob = null
         if (loadedPath != null) try { engine.unload() } catch (_: Throwable) { }
         loadedPath = null
         pending = emptyList()
-    }
-
-    private fun memoryInfo(): ActivityManager.MemoryInfo = ActivityManager.MemoryInfo().also {
-        (app.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(it)
     }
 
     private fun ensureOpen() = check(!closed.get()) { "Agent controller is closed" }
@@ -395,16 +373,13 @@ class AgentController(context: Context) : Closeable {
     override fun close() {
         if (closed.compareAndSet(false, true)) {
             stop()
-            scope.cancel()
             dispatcher.close()
             db.close()
         }
     }
 
     companion object {
-        private const val MIN_FREE_BYTES = 220L * 1024L * 1024L
-        private const val AMPLE_FREE_BYTES = 1536L * 1024L * 1024L
-        private const val IDLE_UNLOAD_MS = 10 * 60 * 1000L
+        private const val DEFAULT_CONTEXT = 512
         private const val DEFAULT_THREADS = 2
         private const val ANSWER_TOKENS = 128
         private const val ACTION_GRAMMAR = "root ::= \"{\\\"steps\\\":[\" (step (\",\" step){0,7})? \"]}\"\nstep ::= \"{\\\"tool\\\":\\\"\" tool \"\\\",\\\"args\\\":\" object \"}\"\ntool ::= [a-zA-Z0-9_./-]+\nobject ::= \"{}\" | \"{\\\"[a-zA-Z_]+\\\":\" value (\",\\\"[a-zA-Z_]+\\\":\" value)* \"}\"\nvalue ::= string | number | \"true\" | \"false\"\nstring ::= \"\\\"[^\\\"\\\\]*\\\"\"\nnumber ::= [0-9]+"

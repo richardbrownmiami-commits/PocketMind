@@ -7,7 +7,7 @@ import io.requery.android.database.sqlite.SQLiteDatabase
 import io.requery.android.database.sqlite.SQLiteOpenHelper
 import java.security.MessageDigest
 
-class AppDatabase(context: Context) : SQLiteOpenHelper(context, "pocketmind_memory.db", null, 1) {
+class AppDatabase(context: Context, databaseName: String = "pocketmind_memory.db") : SQLiteOpenHelper(context, databaseName, null, 1) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL, content TEXT NOT NULL, time INTEGER NOT NULL)")
         db.execSQL("CREATE TABLE IF NOT EXISTS topic_state(id INTEGER PRIMARY KEY CHECK(id=1), entity TEXT NOT NULL, kind TEXT NOT NULL, last_question TEXT NOT NULL, updated INTEGER NOT NULL)")

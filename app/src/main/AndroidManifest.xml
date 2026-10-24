@@ -26,6 +26,7 @@
         android:supportsRtl="true">
         <activity android:name=".ui.MemoryActivity" android:exported="false" />
         <activity android:name=".ui.ModelsActivity" android:exported="false" />
+        <activity android:name=".ui.DiagnosticsActivity" android:exported="false" />
         <service
             android:name=".core.GenerationService"
             android:exported="false"

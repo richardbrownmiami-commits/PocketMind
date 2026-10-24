@@ -72,6 +72,10 @@ class MainActivity : AppCompatActivity() {
             text = "Memory"
             setOnClickListener { startActivity(Intent(this@MainActivity, MemoryActivity::class.java)) }
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        nav.addView(Button(this).apply {
+            text = "Tester"
+            setOnClickListener { startActivity(Intent(this@MainActivity, DiagnosticsActivity::class.java)) }
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         root.addView(nav)
         status = TextView(this).apply {
             textSize = 13f

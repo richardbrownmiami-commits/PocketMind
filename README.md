@@ -13,6 +13,14 @@ gradle testDebugUnitTest assembleDebug
 
 The checked-in GitHub Actions workflow installs the pinned Android toolchain, fetches the pinned llama.cpp source, runs JVM tests, builds the APK, and checks that the APK contains no non-ARMv7 native libraries.
 
+## In-app tester
+
+Open **Tester** from the chat screen and tap **Run tests**. It checks Android/ARM compatibility, the installed offline permission, native library loading, model-file readiness, rule/planner/validator logic, safe clock/math/note/battery tools, and memory-store persistence/clear behavior. It reports Android's current memory-pressure flag and available/total RAM but does not stop generation or unload the model based on those readings. Database checks use a uniquely named temporary database and delete it afterward. If a model is already loaded, the tester runs a short generation smoke test without saving a chat turn. **Share report** opens Android's normal share chooser; nothing is sent automatically. The report excludes chat and note contents.
+
+Actions that could change the phone (alarms, timers, flashlight, volume, brightness, app launches, and settings changes) are never triggered by the tester. It preflights available system handlers/capabilities and marks real state-changing tests as not run; those still need manual device verification.
+
+PocketMind does not automatically stop generation, unload a model on Android low-memory callbacks, reject model loading/generation based on free RAM, or idle-unload the model. Explicit Stop and Unload controls remain available. Android may still reclaim or terminate the process under memory pressure; the tester only reports the OS's memory status and cannot prevent that.
+
 ## Import a model
 
 Open **Models**, choose a compatible GGUF file using Android's system document picker, and let PocketMind copy it into its private app files. Models above 1.2 GB are rejected. A compact Q4/Q5 instruct model (for example, a 0.5B–1B model) is the practical starting point for a low-memory 32-bit handset. Model files are not included in this repository.
