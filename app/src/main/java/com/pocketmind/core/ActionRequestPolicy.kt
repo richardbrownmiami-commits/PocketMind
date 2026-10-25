@@ -5,10 +5,24 @@ import com.pocketmind.tools.PlanStep
 /** Keeps failed action planning from silently falling through to ordinary chat. */
 internal object ActionRequestPolicy {
     private const val ACTION_VERBS = "(?:set|start|run|turn on|turn off|turn|switch|toggle|open|launch|bring up|pull up|go to|take me to|change|adjust|put|save|store|write|create|add|take|enable|disable|activate|deactivate|raise|lower|increase|decrease|reduce|boost|mute|silence|dim|brighten|search for|search|find|look for|look up|check|list|show|display|read|tell me|get|remember to|calculate|compute|work out|solve|sum|subtract|multiply|divide)"
-    private const val TOOL_TARGET = "(?:alarm|wake me|timer|countdown|flashlight|torch|(?:media|music|audio )?volume|(?:screen|display )?brightness|battery|ram|storage|device status|system status|app(?:lication)?s?|notes?|memos?|wi-?fi|wireless|bluetooth|airplane(?: mode)?|flight mode|location|gps|time|date)"
+    private const val TOOL_TARGET = "(?:alarm|wake me|timer|countdown|flashlight|torch|(?:media|music|audio )?volume|(?:screen|display )?brightness|battery|ram|storage|device status|system status|app(?:lication)?s?|notes?|memos?|wi-?fi|wireless|bluetooth|airplane(?: mode)?|flight mode|location|gps|time|date|actions?|action history|action log|tool calls?)"
 
     const val NO_SAFE_PLAN_REPLY =
         "I couldn't safely create a valid action plan for that request. Nothing was run or changed. Please rephrase it with the action and any required details."
+
+    private val historyRequestPatterns = listOf(
+        Regex("""^(?:list|show|display|read|get|check)(?:\s+me)?\s+(?:(?:a\s+)?list\s+of\s+)?(?:(?:the|all|my|recent|previous|past|recorded)\s+)*(?:action\s+history|action\s+log|tool\s+calls?|actions?).*$""", RegexOption.IGNORE_CASE),
+        Regex("""^(?:what|which)\s+actions?\s+(?:have you\s+(?:done|taken|run|performed)|did you\s+(?:do|take|run|perform)).*$""", RegexOption.IGNORE_CASE),
+        Regex("""^(?:(?:is|are|was|were)\s+(?:anything|something|some|any\s+actions?)\s+(?:actions?\s+)?(?:done|performed|executed)|(?:has|have)\s+(?:anything|something|some|any\s+actions?)\s+been\s+(?:done|performed|executed)).*$""", RegexOption.IGNORE_CASE),
+        Regex("""^(?:search|find)\s+(?:my\s+)?(?:actions?|action\s+history|action\s+log|tool\s+calls?)\s+(?:for|about|matching)\s+.+$""", RegexOption.IGNORE_CASE),
+        Regex("""^why\s+did\s+you\s+(?:do\s+that|set|start|turn\s+on|turn\s+off|open|change)\b.*$""", RegexOption.IGNORE_CASE)
+    )
+
+    /** History is a model-planned tool call only for an explicit request, never ambient chat context. */
+    fun isActionHistoryRequest(text: String): Boolean {
+        val clean = text.trim().trimEnd('.', '?', '!').trim()
+        return clean.isNotEmpty() && historyRequestPatterns.any { it.matches(clean) }
+    }
 
     fun looksLikeAction(text: String, ruleMatched: Boolean = false): Boolean {
         if (ruleMatched) return false

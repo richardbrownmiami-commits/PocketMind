@@ -30,6 +30,7 @@ class ToolRegistry(val all: List<ToolSpec> = defaults) {
             ToolSpec("clock.time", "Read the current local time", emptyList(), RiskLevel.LOW), ToolSpec("clock.date", "Read today's local date", emptyList(), RiskLevel.LOW),
             ToolSpec("math.calculate", "Evaluate basic arithmetic", listOf(ArgSpec("expression", ArgType.STRING)), RiskLevel.LOW),
             ToolSpec("note.save", "Save a note", listOf(ArgSpec("text", ArgType.STRING)), RiskLevel.LOW), ToolSpec("note.list", "List saved notes", emptyList(), RiskLevel.LOW), ToolSpec("note.search", "Search saved notes", listOf(ArgSpec("query", ArgType.STRING)), RiskLevel.LOW),
+            ToolSpec("action.history", "Read recent recorded action history only when the user explicitly asks about past actions. For actions done without model tools or by fast rules, set source=rules; otherwise leave source unset or use all. Search terms and sources include rule-driven actions, model-planned actions, and tool history. Read-only; never call for ordinary conversation.", listOf(ArgSpec("query", ArgType.STRING, false), ArgSpec("limit", ArgType.INTEGER, false), ArgSpec("source", ArgType.STRING, false)), RiskLevel.LOW),
             ToolSpec("alarm.set", "Set an alarm", listOf(ArgSpec("hour", ArgType.INTEGER), ArgSpec("minute", ArgType.INTEGER), ArgSpec("daysFromToday", ArgType.INTEGER, false), ArgSpec("label", ArgType.STRING, false)), RiskLevel.HIGH),
             ToolSpec("timer.set", "Start a timer", listOf(ArgSpec("seconds", ArgType.INTEGER)), RiskLevel.MEDIUM),
             ToolSpec("flashlight", "Turn flashlight on or off", listOf(ArgSpec("enabled", ArgType.BOOLEAN)), RiskLevel.MEDIUM),
@@ -61,6 +62,10 @@ class ToolValidator(private val registry: ToolRegistry = ToolRegistry()) {
         if (step.tool == "alarm.set" && (((step.args["hour"] as Number).toLong() !in 0L..23L) || ((step.args["minute"] as Number).toLong() !in 0L..59L))) return "Alarm time out of range"
         if (step.tool == "alarm.set" && step.args["daysFromToday"] != null && (step.args["daysFromToday"] as Number).toLong() !in 0L..1L) return "Alarm date must be today or tomorrow"
         if (step.tool == "timer.set" && ((step.args["seconds"] as Number).toLong() !in 1L..86400L)) return "Timer seconds out of range"
+        if (step.tool == "action.history") {
+            if (step.args["limit"] != null && (step.args["limit"] as Number).toLong() !in 1L..5L) return "History limit must be from 1 to 5"
+            if (step.args["source"] != null && (step.args["source"] as String).lowercase() !in setOf("all", "rules", "planner", "router", "legacy", "unknown")) return "Unknown action-history source"
+        }
         if (step.tool == "volume") {
             val hasLevel = step.args.containsKey("level")
             val hasStep = step.args.containsKey("step")

@@ -20,6 +20,8 @@ import java.io.File
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
+import java.time.Instant
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.concurrent.CountDownLatch
@@ -29,7 +31,7 @@ import java.util.concurrent.TimeUnit
 internal object ToolExecutionRetryPolicy {
     private val retrySafeTools = setOf(
         "clock.time", "clock.date", "math.calculate", "note.list", "note.search",
-        "battery/status", "app.search"
+        "battery/status", "app.search", "action.history"
     )
 
     fun maximumAttempts(step: PlanStep): Int = if (step.tool in retrySafeTools) 3 else 1
@@ -61,14 +63,14 @@ class ToolRuntime(
         if (usesScratchDatabase && databaseDelegate.isInitialized()) database.close()
     }
 
-    fun execute(steps: List<PlanStep>, originalRequest: String): List<ActionResult> {
+    fun execute(steps: List<PlanStep>, originalRequest: String, source: String = "unknown"): List<ActionResult> {
         if (steps.size > 8) {
-            return listOf(finish(PlanStep("action.plan", emptyMap()), originalRequest, ActionStatus.FAILED, "Plan exceeds 8 steps"))
+            return listOf(finish(PlanStep("action.plan", emptyMap()), originalRequest, ActionStatus.FAILED, "Plan exceeds 8 steps", source))
         }
         return steps.map { step ->
             val invalid = validator.validate(step)
-            if (invalid != null) return@map finish(step, originalRequest, ActionStatus.FAILED, invalid)
-            if (registry.get(step.tool) == null) return@map finish(step, originalRequest, ActionStatus.FAILED, "Unknown tool")
+            if (invalid != null) return@map finish(step, originalRequest, ActionStatus.FAILED, invalid, source)
+            if (registry.get(step.tool) == null) return@map finish(step, originalRequest, ActionStatus.FAILED, "Unknown tool", source)
             var result = perform(step)
             var attempts = 1
             val maximumAttempts = ToolExecutionRetryPolicy.maximumAttempts(step)
@@ -76,15 +78,16 @@ class ToolRuntime(
                 attempts++
                 result = perform(step)
             }
-            finish(step, originalRequest, result.status, result.message)
+            finish(step, originalRequest, result.status, result.message, source)
         }
     }
 
-    private fun finish(step: PlanStep, originalRequest: String, status: ActionStatus, message: String): ActionResult {
+    private fun finish(step: PlanStep, originalRequest: String, status: ActionStatus, message: String, source: String): ActionResult {
         val result = ActionResult(step.tool, status, message, step.args)
+        if (step.tool == "action.history") return result
         try {
             val safeArgs = step.args.entries.joinToString(prefix = "{", postfix = "}") { "${it.key}=${it.value}" }.take(500)
-            actions.record(originalRequest, step.tool, safeArgs, status.name, message)
+            actions.record(originalRequest, step.tool, safeArgs, status.name, message, source)
             return result
         } catch (e: Exception) {
             val reason = e.message?.take(120) ?: "database write failed"
@@ -113,6 +116,7 @@ class ToolRuntime(
                     val found = notes.search(a["query"] as String)
                     verified(step, if (found.isEmpty()) "No matching notes." else found.joinToString("\n") { "• ${it.content}" })
                 }
+                "action.history" -> actionHistory(step)
                 "alarm.set" -> setAlarm(step)
                 "timer.set" -> setTimer(step)
                 "flashlight" -> setTorch(step, a["enabled"] as Boolean)
@@ -127,6 +131,36 @@ class ToolRuntime(
         } catch (e: Exception) {
             failed(step, e.message?.take(200) ?: "The action failed.")
         }
+    }
+
+    private fun actionHistory(step: PlanStep): ActionResult {
+        val query = step.args["query"] as? String
+        val limit = (step.args["limit"] as? Number)?.toInt() ?: 5
+        val requestedSource = (step.args["source"] as? String)?.lowercase()
+        val source = requestedSource?.takeUnless { it == "all" }
+        val records = actions.search(query, 20, source)
+            .filterNot { it.tool == "action.plan" }
+            .take(limit.coerceIn(1, 5))
+        if (records.isEmpty()) {
+            val sourceLabel = when (source) {
+                "rules" -> "rule-based"
+                "planner" -> "model-planned"
+                else -> ""
+            }
+            val message = if (sourceLabel.isEmpty()) "No recorded actions found." else "No recorded $sourceLabel actions found."
+            return verified(step, message)
+        }
+        val formatter = DateTimeFormatter.ofPattern("MMM d, h:mm a", Locale.getDefault())
+        val lines = records.joinToString("\n") { record ->
+            val whenRun = Instant.ofEpochMilli(record.created).atZone(ZoneId.systemDefault()).format(formatter)
+            val origin = when (record.source) {
+                "rules" -> "rules"
+                "planner" -> "planner"
+                else -> record.source
+            }
+            "$whenRun · $origin · ${record.tool} · ${record.outcome}: ${record.message.take(120)}"
+        }
+        return verified(step, "Recent recorded actions (newest first):\n$lines")
     }
 
     private fun setAlarm(step: PlanStep): ActionResult {

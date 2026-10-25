@@ -17,7 +17,7 @@ The GitHub Actions workflow fetches the pinned llama.cpp source, builds the debu
 
 Open **Models** to import a compatible GGUF file with Android's system document picker and select it for local inference. Models above 1.2 GB are rejected. A compact Q4/Q5 instruct model (for example, a 0.5B–1B model) is a practical starting point for a low-memory 32-bit handset.
 
-Use the **Chat** screen to talk or enter commands. Common commands are matched by deterministic rules first; other clear action requests can use the local planner. Validated supported actions run directly, and PocketMind reports verified results, Android hand-offs, or failures. The **Memory** screen lets you review and clear saved memory. Normal **Stop** and **Unload** controls remain available.
+Use the **Chat** screen to talk or enter commands. Common commands are matched by deterministic rules first; other clear action requests can use the local planner. Validated supported actions run directly, and PocketMind reports verified results, Android hand-offs, or failures. Ask explicitly to list recent actions or ask whether anything was done without model tools to query the local action history; ordinary replies do not query it. History distinguishes rule-driven actions from model-planned ones and omits raw tool arguments. The **Memory** screen lets you review and clear saved memory. Normal **Stop** and **Unload** controls remain available.
 
 ## Privacy and limits
 

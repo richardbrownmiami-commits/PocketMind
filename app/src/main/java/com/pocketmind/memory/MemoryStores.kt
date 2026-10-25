@@ -7,14 +7,14 @@ import io.requery.android.database.sqlite.SQLiteDatabase
 import io.requery.android.database.sqlite.SQLiteOpenHelper
 import java.security.MessageDigest
 
-class AppDatabase(context: Context, databaseName: String = "pocketmind_memory.db") : SQLiteOpenHelper(context, databaseName, null, 1) {
+class AppDatabase(context: Context, databaseName: String = "pocketmind_memory.db") : SQLiteOpenHelper(context, databaseName, null, 2) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL, content TEXT NOT NULL, time INTEGER NOT NULL)")
         db.execSQL("CREATE TABLE IF NOT EXISTS topic_state(id INTEGER PRIMARY KEY CHECK(id=1), entity TEXT NOT NULL, kind TEXT NOT NULL, last_question TEXT NOT NULL, updated INTEGER NOT NULL)")
         db.execSQL("CREATE TABLE IF NOT EXISTS summaries(id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL, updated INTEGER NOT NULL)")
         db.execSQL("CREATE TABLE IF NOT EXISTS facts(id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL, value TEXT NOT NULL, auto INTEGER NOT NULL DEFAULT 1, created INTEGER NOT NULL)")
         db.execSQL("CREATE TABLE IF NOT EXISTS recall(id INTEGER PRIMARY KEY AUTOINCREMENT, message_id INTEGER, snippet TEXT NOT NULL, features BLOB NOT NULL, created INTEGER NOT NULL)")
-        db.execSQL("CREATE TABLE IF NOT EXISTS action_log(id INTEGER PRIMARY KEY AUTOINCREMENT, request TEXT NOT NULL, tool TEXT NOT NULL, args TEXT NOT NULL, outcome TEXT NOT NULL, message TEXT NOT NULL, created INTEGER NOT NULL)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS action_log(id INTEGER PRIMARY KEY AUTOINCREMENT, request TEXT NOT NULL, tool TEXT NOT NULL, args TEXT NOT NULL, outcome TEXT NOT NULL, message TEXT NOT NULL, created INTEGER NOT NULL, source TEXT NOT NULL DEFAULT 'legacy')")
         db.execSQL("CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT NOT NULL, created INTEGER NOT NULL)")
         db.execSQL("CREATE TABLE IF NOT EXISTS feature_version(id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL)")
         db.execSQL("INSERT OR IGNORE INTO feature_version(id,version) VALUES(1,1)")
@@ -24,9 +24,12 @@ class AppDatabase(context: Context, databaseName: String = "pocketmind_memory.db
         db.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(message_id UNINDEXED, role UNINDEXED, content)")
         db.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS recall_fts USING fts5(snippet)")
         db.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(content)")
+        db.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS action_log_fts USING fts5(action_id UNINDEXED, request, tool, args, outcome, message, source)")
+        db.execSQL("INSERT INTO action_log_fts(rowid,action_id,request,tool,args,outcome,message,source) SELECT a.id,a.id,a.request,a.tool,a.args,a.outcome,a.message,a.source FROM action_log a WHERE NOT EXISTS (SELECT 1 FROM action_log_fts f WHERE f.rowid=a.id)")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) db.execSQL("ALTER TABLE action_log ADD COLUMN source TEXT NOT NULL DEFAULT 'legacy'")
         onCreate(db)
     }
 }
@@ -224,7 +227,7 @@ class RecallStore(private val db: SQLiteDatabase) {
 class ActionLogStore(private val db: SQLiteDatabase) {
     constructor(helper: AppDatabase) : this(helper.writableDatabase)
 
-    fun record(request: String, tool: String, argsJson: String, outcome: String, message: String) {
+    fun record(request: String, tool: String, argsJson: String, outcome: String, message: String, source: String = "legacy") {
         val safeArgs = Regex("(?:hour|minute|daysFromToday|seconds|level|step|index|enabled)=([^,}]+)").findAll(argsJson)
             .joinToString(prefix = "{", postfix = "}") { "${it.groupValues[0]}" }.take(500)
         val safeMessage = when (tool) {
@@ -233,24 +236,70 @@ class ActionLogStore(private val db: SQLiteDatabase) {
             "note.search" -> "Searched saved notes."
             else -> message.take(180)
         }
+        val safeSource = source.lowercase().takeIf { it in ACTION_SOURCES } ?: "legacy"
         val values = ContentValues().apply {
             put("request", request.trim().take(500)); put("tool", tool.take(100)); put("args", safeArgs)
-            put("outcome", outcome.take(180)); put("message", safeMessage); put("created", System.currentTimeMillis())
+            put("outcome", outcome.take(180)); put("message", safeMessage); put("created", System.currentTimeMillis()); put("source", safeSource)
         }
-        check(db.insert("action_log", null, values) > 0L) { "SQLite did not insert the action log row" }
-        db.execSQL("DELETE FROM action_log WHERE id NOT IN (SELECT id FROM action_log ORDER BY id DESC LIMIT 200)")
+        db.beginTransaction()
+        try {
+            val id = db.insert("action_log", null, values)
+            check(id > 0L) { "SQLite did not insert the action log row" }
+            db.execSQL("INSERT INTO action_log_fts(rowid,action_id,request,tool,args,outcome,message,source) VALUES(?,?,?,?,?,?,?,?)", arrayOf(id, id, values.getAsString("request"), values.getAsString("tool"), safeArgs, values.getAsString("outcome"), safeMessage, safeSource))
+            db.execSQL("DELETE FROM action_log WHERE id NOT IN (SELECT id FROM action_log ORDER BY id DESC LIMIT 200)")
+            db.execSQL("DELETE FROM action_log_fts WHERE rowid NOT IN (SELECT id FROM action_log)")
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
     }
 
     fun recent(limit: Int = 200): List<ActionRecord> {
+        return readRows("SELECT id,request,tool,args,outcome,message,created,source FROM action_log ORDER BY id DESC LIMIT ?", arrayOf(limit.coerceIn(0, 200).toString()))
+    }
+
+    fun search(query: String? = null, limit: Int = 10, source: String? = null): List<ActionRecord> {
+        val boundedLimit = limit.coerceIn(1, 20)
+        val safeSource = source?.lowercase()?.takeIf { it in ACTION_SOURCES }
+        val terms = query.orEmpty().lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotBlank() }.distinct().take(12)
+        if (terms.isEmpty()) return recent(200).filter { safeSource == null || it.source == safeSource }.take(boundedLimit)
+
+        val match = terms.joinToString(" OR ") { "\"$it\"*" }
+        val sql = buildString {
+            append("SELECT a.id,a.request,a.tool,a.args,a.outcome,a.message,a.created,a.source FROM action_log_fts JOIN action_log a ON a.id=action_log_fts.rowid WHERE action_log_fts MATCH ?")
+            if (safeSource != null) append(" AND a.source=?")
+            append(" ORDER BY a.id DESC LIMIT ?")
+        }
+        val args = buildList {
+            add(match)
+            if (safeSource != null) add(safeSource)
+            add(boundedLimit.toString())
+        }.toTypedArray()
+        return try {
+            readRows(sql, args)
+        } catch (_: Exception) {
+            recent(200).filter { row ->
+                (safeSource == null || row.source == safeSource) && terms.any { term ->
+                    "${row.request} ${row.tool} ${row.argsJson} ${row.outcome} ${row.message}".contains(term, ignoreCase = true)
+                }
+            }.take(boundedLimit)
+        }
+    }
+
+    private fun readRows(sql: String, args: Array<String>?): List<ActionRecord> {
         val result = mutableListOf<ActionRecord>()
-        db.forEach("SELECT id,request,tool,args,outcome,message,created FROM action_log ORDER BY id DESC LIMIT ?", arrayOf(limit.coerceIn(0, 200).toString())) { c ->
-            result.add(ActionRecord(c.getLong(0), c.text("request"), c.text("tool"), c.text("args"), c.text("outcome"), c.text("message"), c.getLong(6)))
+        db.forEach(sql, args) { c ->
+            result.add(ActionRecord(c.getLong(0), c.text("request"), c.text("tool"), c.text("args"), c.text("outcome"), c.text("message"), c.getLong(6), c.text("source")))
         }
         return result
     }
+
+    companion object {
+        private val ACTION_SOURCES = setOf("rules", "planner", "router", "legacy", "unknown")
+    }
 }
 
-data class ActionRecord(val id: Long, val request: String, val tool: String, val argsJson: String, val outcome: String, val message: String, val created: Long)
+data class ActionRecord(val id: Long, val request: String, val tool: String, val argsJson: String, val outcome: String, val message: String, val created: Long, val source: String)
 
 fun clearMemory(db: SQLiteDatabase) {
     RecallStore(db).clear()
@@ -260,5 +309,6 @@ fun clearMemory(db: SQLiteDatabase) {
     db.delete("topic_state", null, null)
     FactStore(db).clearAutoCreated()
     db.delete("action_log", null, null)
+    try { db.execSQL("DELETE FROM action_log_fts") } catch (_: Exception) { }
 }
 fun clearMemory(helper: AppDatabase) = clearMemory(helper.writableDatabase)
