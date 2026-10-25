@@ -141,7 +141,7 @@ class AgentController(context: Context) : Closeable {
                 indexRecall(userId, raw)
                 val originalRequest = "${clarificationIntent.request} $raw".trim()
                 val execution = executeValidatedPlan(listOf(followUpPlan), originalRequest)
-                val answer = actionReply(originalRequest, execution.results, onToken)
+                val answer = actionReply(execution.results)
                 val assistantId = messages.append("assistant", answer)
                 indexRecall(assistantId, answer)
                 return@withContext AgentReply(answer, execution.results)
@@ -222,7 +222,7 @@ class AgentController(context: Context) : Closeable {
                 return@withContext AgentReply(answer)
             }
             val execution = executeValidatedPlan(rule, raw)
-            val answer = actionReply(raw, execution.results, onToken)
+            val answer = actionReply(execution.results)
             val assistantId = messages.append("assistant", answer)
             indexRecall(assistantId, answer)
             updateTopic(raw, execution.results)
@@ -263,7 +263,7 @@ class AgentController(context: Context) : Closeable {
         val plan = buildPlan(resolved, actionRequest)
         if (plan != null) {
             val execution = executeValidatedPlan(plan, raw)
-            val answer = actionReply(raw, execution.results, onToken)
+            val answer = actionReply(execution.results)
             val assistantId = messages.append("assistant", answer)
             indexRecall(assistantId, answer)
             updateTopic(raw, execution.results)
@@ -336,19 +336,14 @@ class AgentController(context: Context) : Closeable {
         return try { ActionExecution(runtime.execute(steps, originalRequest)) } finally { runtime.close() }
     }
 
-    private fun actionReply(request: String, results: List<ActionResult>, onToken: (String) -> Unit): String {
-        val resultSummary = if (results.isEmpty()) "No action was taken." else results.joinToString("\n") { result ->
+    private fun actionReply(results: List<ActionResult>): String =
+        if (results.isEmpty()) "No action was taken."
+        else results.joinToString("\n") { result ->
             when (result.status) {
-                ActionStatus.VERIFIED -> "Action '${result.tool}' succeeded: ${result.message.take(80)}"
-                ActionStatus.HANDED_OFF -> "Action '${result.tool}' opened a system screen: ${result.message.take(80)}"
-                ActionStatus.FAILED -> "Action '${result.tool}' failed. Do not expose internal exception details."
+                ActionStatus.VERIFIED, ActionStatus.HANDED_OFF -> result.message
+                ActionStatus.FAILED -> "I couldn't complete that action."
             }
         }
-        return generateActionReply(
-            "The user asked: ${request.take(220)}\nResult: $resultSummary\nWrite one short natural reply confirming what happened or explaining the problem. Do not repeat technical terms.",
-            results, onToken
-        )
-    }
 
     private fun generateActionReply(
         systemHint: String,
