@@ -1,6 +1,6 @@
 package com.pocketmind.memory
 
-/** Pure helpers shared by the SQLite stores and JVM tests. */
+/** Pure helpers shared by the SQLite stores and app logic. */
 data class FactCandidate(val key: String, val value: String)
 
 object MemoryRules {

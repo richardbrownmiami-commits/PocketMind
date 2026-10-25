@@ -28,7 +28,6 @@ android {
                 targets += "pocketmind"
             }
         }
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     externalNativeBuild {
@@ -36,9 +35,6 @@ android {
     }
 
     buildTypes {
-        debug {
-            applicationIdSuffix = ".test"
-        }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -50,7 +46,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    testOptions { unitTests.isReturnDefaultValues = true }
     packaging { jniLibs { useLegacyPackaging = true } }
     androidResources { noCompress += "gguf" }
 }
@@ -62,7 +57,4 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.recyclerview:recyclerview:1.3.2")
     implementation("com.github.requery:sqlite-android:3.49.0")
-
-    testImplementation("junit:junit:4.13.2")
-    testImplementation("org.jetbrains.kotlin:kotlin-test:2.0.21")
 }

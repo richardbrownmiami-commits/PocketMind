@@ -18,7 +18,6 @@
         <intent><action android:name="android.settings.action.MANAGE_WRITE_SETTINGS" /></intent>
         <intent><action android:name="android.intent.action.SET_ALARM" /></intent>
         <intent><action android:name="android.intent.action.SET_TIMER" /></intent>
-        <intent><action android:name="android.intent.action.DISMISS_ALARM" /></intent>
     </queries>
 
     <application
@@ -29,7 +28,6 @@
         android:supportsRtl="true">
         <activity android:name=".ui.MemoryActivity" android:exported="false" />
         <activity android:name=".ui.ModelsActivity" android:exported="false" />
-        <activity android:name=".ui.DiagnosticsActivity" android:exported="false" />
         <service
             android:name=".core.GenerationService"
             android:exported="false"

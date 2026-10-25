@@ -33,7 +33,7 @@ Notes:
 | Language | Kotlin (JDK 17) | Standard for Android |
 | Build | Gradle + AGP, CMake 3.22.1, NDK r27 (or newer) | armv7 is still supported |
 | Model runtime | **llama.cpp** (vendored at a pinned commit, built with CMake) | Runs GGUF models on CPU, supports 32-bit ARM with NEON, supports grammar-constrained output |
-| Model files | Small quantized GGUF (about 0.3–1.5B parameters, Q4 or Q5, file at most about 1.2 GB) | Must fit 32-bit address space and low RAM. Examples to test: Qwen2.5-0.5B/1.5B-Instruct, Llama-3.2-1B-Instruct, SmolLM2-360M/1.7B-Instruct |
+| Model files | Small quantized GGUF (about 0.3–1.5B parameters, Q4 or Q5, file at most about 1.2 GB) | Must fit 32-bit address space and low RAM. Example models: Qwen2.5-0.5B/1.5B-Instruct, Llama-3.2-1B-Instruct, SmolLM2-360M/1.7B-Instruct |
 | Database | `com.github.requery:sqlite-android` | Bundles SQLite with FTS5 so it does not depend on the phone's system SQLite |
 | UI | Plain Android Views: Activity, RecyclerView, Material components | Compose is heavy on low-RAM 32-bit phones |
 | Async | Kotlin coroutines (one single-threaded queue for the model) | Safe native access |
@@ -103,9 +103,9 @@ Compile flags: `-O3 -mfpu=neon -mfloat-abi=softfp`. Build one shared library `li
 
 - JNI API: `load(path, nCtx, nBatch, nUbatch, threads)`, `generate(messages, maxTokens, grammar?, onToken)`, `countTokens(text)`, `cancel()`, `unload()`, `stats()`.
 - One engine instance, called only from the single model queue.
-- Context: default 512, allow 1024 when `ActivityManager.MemoryInfo.availMem` is comfortably high. Threads: 2 by default (user adjustable, max 4).
+- Context: default 512; any context change is user-selected, not based on a free-RAM gate. Threads: 2 by default (user adjustable, max 4).
 - Use `mmap` loading. Reject model files above the size limit before loading.
-- Unload after 10 idle minutes and on `onTrimMemory`. Hard-stop generation if process memory passes a safe cap.
+- Do not gate model loading or generation on free RAM, automatically stop generation, or automatically unload on memory callbacks or after idle time. Keep Stop and Unload as explicit user controls.
 - Support **grammar-constrained generation** (GBNF) so the planner can only output valid JSON. This is the key trick that makes tiny models usable for tool calling.
 
 ## 7. The router (`core/Router`)
@@ -158,7 +158,7 @@ All in one SQLite database. Create tables with `CREATE TABLE IF NOT EXISTS`; kee
 | brightness | `Settings.System.putInt` (needs `WRITE_SETTINGS` granted by user) | read back | |
 | battery / storage / RAM status | system services | the value itself | automatic |
 | app.open / app.search | `PackageManager` + launch intent (needs `<queries>`) | launch resolved | `HANDED_OFF` |
-| wifi / bluetooth / airplane / location | open settings or `Settings.Panel` | none | **Android 11 apps cannot silently toggle Wi-Fi or airplane mode.** Bluetooth enable may work for apps targeting API 30; test on device. Otherwise `HANDED_OFF` |
+| wifi / bluetooth / airplane / location | open settings or `Settings.Panel` | none | **Android 11 apps cannot silently toggle Wi-Fi or airplane mode.** Bluetooth enable may work for apps targeting API 30; verify on device. Otherwise `HANDED_OFF` |
 
 Full silent control of the last row needs an Accessibility service (Phase 3) or root/Shizuku, which are optional and opt-in.
 
@@ -179,45 +179,32 @@ Full silent control of the last row needs an Accessibility service (Phase 3) or 
 
 ## 12. Milestones
 
-1. **Skeleton and engine**: project builds for `armeabi-v7a` API 30; a small model loads and generates in a test screen.
+1. **Skeleton and engine**: project builds for `armeabi-v7a` API 30; a small model loads and generates in the Chat screen.
 2. **Chat**: streaming chat, stop, model management, database, memory-free.
 3. **Memory**: Section 8 complete (window, topic, resolver, summary, facts, recall).
 4. **Tools and rules**: registry, validator, verify loop, starter tools, action log.
 5. **Planner**: grammar-constrained JSON planning with top-5 tool selection; confirmations for risky tools.
-6. **Polish**: foreground service stability, memory trimming, settings, error messages.
+6. **Polish**: foreground service stability, settings, error messages.
 7. **Optional**: Accessibility control, text-to-speech/speech input, QuickJS plugins, character personas.
 
-## 13. Tests
-
-JVM unit tests for: rules matching (including negation), tool validator, follow-up resolver, prompt budget (never exceeds context), fact store, topic expiry, grammar-output parsing.
-
-Behaviour tests (scripted, run on device where possible):
-1. "Who is Elon Musk?" → "Why did he buy Twitter?" is rewritten to name him.
-2. "My name is Ravi", restart app, "what is my name" → Ravi. "Forget my name" removes it.
-3. "Set alarm 6:30" → alarm exists and the reply says verified; if it cannot be verified the reply says so.
-4. "Why did you set it?" answers from the action log.
-5. "Don't set an alarm" does nothing.
-6. A garbage planner output is rejected and nothing runs.
-7. Long history at `nCtx = 512` never overflows the budget.
-
-## 14. Rules for the agent
+## 13. Rules for the agent
 
 - Work from an empty repository on feature branches; `main` always builds.
-- One commit per sub-step, each passing build and unit tests.
+- One commit per sub-step, each passing the Android build.
 - Pin every external dependency (llama.cpp commit, library versions).
 - Add nothing outside Section 3 without a written reason.
 - Do not claim device behaviour you did not run; list unverified items in the PR.
 - Keep `README.md` current: how to fetch llama.cpp, build, and import a model.
 
-## 15. Definition of done (first release)
+## 14. Definition of done (first release)
 
 - APK contains only `armeabi-v7a` libs and installs on Android 11 (API 30).
 - Model imports, loads, chats with streaming and can be stopped.
-- Memory scenarios in Section 13 pass; facts survive restart; clear-memory works.
+- Facts survive restart; clear-memory works.
 - At least alarm, timer, notes, flashlight and battery work through the verify loop with honest statuses.
 - A 15-minute mixed session on a real 32-bit phone runs without a crash or out-of-memory stop.
 
-## 16. Known risks
+## 15. Known risks
 
 - Small models are weak at reasoning; that is why rules, grammar-constrained JSON, short tool lists and deterministic follow-up rewriting exist.
 - Speed on 32-bit CPUs is low; measure it and tune context, threads and model size before promising anything.

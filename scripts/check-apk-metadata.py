@@ -11,7 +11,7 @@ from pathlib import Path
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("apk", type=Path)
-    parser.add_argument("--application-id", default="com.pocketmind.test")
+    parser.add_argument("--application-id", default="com.pocketmind")
     parser.add_argument("--version-code", type=int, required=True)
     parser.add_argument("--version-name", required=True)
     args = parser.parse_args()

@@ -137,24 +137,6 @@ class ToolRuntime(
         }
     }
 
-    /** Dismisses only the uniquely labeled Tester alarm, and only after a separate in-app approval. */
-    fun dismissDiagnosticAlarmByLabel(label: String, userApproved: Boolean): ActionResult {
-        val step = PlanStep("alarm.dismiss", mapOf("label" to label))
-        if (!userApproved) return finish(step, ActionStatus.PENDING_CONFIRMATION, "Separate explicit approval is required before dismissing the Tester alarm.")
-        if (!TesterAlarmLabel.isValid(label)) {
-            return finish(step, ActionStatus.FAILED, "The label is not a PocketMind Tester alarm label; no alarm was dismissed.")
-        }
-        val intent = Intent(AlarmClock.ACTION_DISMISS_ALARM)
-            .putExtra(AlarmClock.EXTRA_ALARM_SEARCH_MODE, AlarmClock.ALARM_SEARCH_MODE_LABEL)
-            .putExtra(AlarmClock.EXTRA_MESSAGE, label)
-            .putExtra(AlarmClock.EXTRA_SKIP_UI, true)
-        if (intent.resolveActivity(app.packageManager) == null) {
-            return finish(step, ActionStatus.FAILED, "No Clock app accepted label-scoped alarm dismissal.")
-        }
-        app.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        return finish(step, ActionStatus.HANDED_OFF, "Requested dismissal of only the uniquely labeled PocketMind Tester alarm; read-back is required before claiming cleanup.")
-    }
-
     private fun setTimer(step: PlanStep): ActionResult {
         val seconds = (step.args["seconds"] as Number).toInt()
         val intent = Intent(AlarmClock.ACTION_SET_TIMER)
@@ -204,23 +186,6 @@ class ToolRuntime(
             else -> "Media volume set to ${step.args["level"]}% and verified."
         }
         return if (actual == target) verified(step, success) else failed(step, success)
-    }
-
-    /** Restores an exact Android stream index only after the caller's separate confirmation. */
-    fun restoreMediaVolumeIndex(index: Int, approved: Boolean): ActionResult {
-        val step = PlanStep("volume", mapOf("index" to index))
-        if (!approved) return finish(step, ActionStatus.PENDING_CONFIRMATION, "Explicit approval is required before restoring the volume.")
-        return try {
-            val audio = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-            val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-            if (index !in 0..max) return finish(step, ActionStatus.FAILED, "Original volume index is no longer valid.")
-            audio.setStreamVolume(AudioManager.STREAM_MUSIC, index, 0)
-            val actual = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
-            if (actual == index) finish(step, ActionStatus.VERIFIED, "Original media volume restored and verified.")
-            else finish(step, ActionStatus.FAILED, "Original media volume could not be restored by read-back.")
-        } catch (error: Exception) {
-            finish(step, ActionStatus.FAILED, error.message?.take(160) ?: "Volume restore failed.")
-        }
     }
 
     private fun setBrightness(step: PlanStep, level: Int): ActionResult {
