@@ -140,9 +140,9 @@ All in one SQLite database. Create tables with `CREATE TABLE IF NOT EXISTS`; kee
 
 **Registry entry:** `id`, description, argument schema (name → type, range), `risk` (low/medium/high), required permission, and a **verifier**.
 
-**Pipeline for every plan step:** validate (schema, ranges, allowed keys) → check permission → confirm if risk ≥ medium → run → **verify** → on failure retry up to 2 times → record in `action_log` → report.
+**Pipeline for every plan step:** validate (schema, ranges, allowed keys) → check required Android permission → run directly after validation (no risk-based confirmation dialog) → **verify** → retry only safe failures → record in `action_log` → report.
 
-**Result statuses:** `VERIFIED`, `HANDED_OFF` (opened a system screen, user must finish), `FAILED`, `PENDING_CONFIRMATION`, `CANCELLED`. The assistant may say "done" **only** for `VERIFIED`. For anything else it says exactly what happened ("I opened the Wi-Fi panel; please toggle it").
+**Result statuses:** `VERIFIED`, `HANDED_OFF` (opened a system screen or permission screen the user must finish), and `FAILED`. The assistant may say "done" **only** for `VERIFIED`. For anything else it says exactly what happened ("I opened the Wi-Fi panel; please toggle it").
 
 **Starter tools and what is realistic on Android 11 (API 30):**
 
@@ -183,7 +183,7 @@ Full silent control of the last row needs an Accessibility service (Phase 3) or 
 2. **Chat**: streaming chat, stop, model management, database, memory-free.
 3. **Memory**: Section 8 complete (window, topic, resolver, summary, facts, recall).
 4. **Tools and rules**: registry, validator, verify loop, starter tools, action log.
-5. **Planner**: grammar-constrained JSON planning with top-5 tool selection; confirmations for risky tools.
+5. **Planner**: grammar-constrained JSON planning with top-5 tool selection; valid plans execute directly after schema validation, with Android permission hand-offs preserved.
 6. **Polish**: foreground service stability, settings, error messages.
 7. **Optional**: Accessibility control, text-to-speech/speech input, QuickJS plugins, character personas.
 

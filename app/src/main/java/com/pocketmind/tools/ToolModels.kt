@@ -3,11 +3,7 @@ package com.pocketmind.tools
 import android.content.Context
 
 enum class RiskLevel { LOW, MEDIUM, HIGH }
-enum class ActionStatus { VERIFIED, HANDED_OFF, FAILED, PENDING_CONFIRMATION, CANCELLED }
-
-internal object ToolApprovalPolicy {
-    fun requiresApproval(risk: RiskLevel): Boolean = risk != RiskLevel.LOW
-}
+enum class ActionStatus { VERIFIED, HANDED_OFF, FAILED }
 
 data class ArgSpec(val name: String, val type: ArgType, val required: Boolean = true, val description: String = "")
 enum class ArgType { STRING, NUMBER, INTEGER, BOOLEAN }
@@ -72,7 +68,12 @@ class ToolValidator(private val registry: ToolRegistry = ToolRegistry()) {
             if (hasStep && ((step.args["step"] as Number).toLong() !in -1L..1L || (step.args["step"] as Number).toLong() == 0L)) return "Volume step must be -1 or 1"
         }
         if (step.tool == "brightness" && ((step.args["level"] as Number).toLong() !in 0L..255L)) return "Brightness level out of range"
-        if (step.tool == "app.open" && !((step.args["package"] as String).matches(Regex("[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+")))) return "Invalid package name"
+        if (step.tool == "app.open") {
+            val target = step.args["package"] as String
+            val isPackage = target.matches(Regex("[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+"))
+            val isAppName = target.matches(Regex("[\\p{L}\\p{N}][\\p{L}\\p{N} ._'-]{0,79}"))
+            if (!isPackage && !isAppName) return "Invalid installed-app name or package"
+        }
         return null
     }
     fun validatePlan(steps: List<PlanStep>): String? {

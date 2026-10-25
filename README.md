@@ -17,11 +17,11 @@ The GitHub Actions workflow fetches the pinned llama.cpp source, builds the debu
 
 Open **Models** to import a compatible GGUF file with Android's system document picker and select it for local inference. Models above 1.2 GB are rejected. A compact Q4/Q5 instruct model (for example, a 0.5B–1B model) is a practical starting point for a low-memory 32-bit handset.
 
-Use the **Chat** screen to talk or enter commands. PocketMind supports local chat and memory, with user-confirmed phone actions and honest verified or handed-off statuses. The **Memory** screen lets you review and clear saved memory. Normal **Stop** and **Unload** controls remain available.
+Use the **Chat** screen to talk or enter commands. Common commands are matched by deterministic rules first; other clear action requests can use the local planner. Validated supported actions run directly, and PocketMind reports verified results, Android hand-offs, or failures. The **Memory** screen lets you review and clear saved memory. Normal **Stop** and **Unload** controls remain available.
 
 ## Privacy and limits
 
-Chats, facts, recall, action records, and imported models are stored locally. The app has no `INTERNET` permission and never executes model-produced shell commands. Tool arguments are validated, risk-bearing actions require user confirmation, and the app reports success only after verification. Some Android actions can only open a system screen and are reported as handed off.
+Chats, facts, recall, action records, and imported models are stored locally. The app has no `INTERNET` permission and never executes model-produced shell commands. Tool arguments are validated before execution. There are no risk-based confirmation dialogs; Android-required permission screens remain in place, and success is reported only after verification. Some Android actions can only open a system screen and are reported as handed off.
 
 PocketMind does not use free-RAM checks to reject model loading or generation, automatically stop generation, unload on low-memory callbacks, or idle-unload a model. Android may still reclaim or terminate the process under system memory pressure. Device-specific alarm, torch, performance, and memory behavior should be evaluated on an Android 11 ARMv7 phone.
 

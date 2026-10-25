@@ -17,7 +17,6 @@ import com.pocketmind.tools.ActionStatus
 import com.pocketmind.tools.PlanStep
 import com.pocketmind.tools.PlannerJson
 import com.pocketmind.tools.RuleEngine
-import com.pocketmind.tools.RiskLevel
 import com.pocketmind.tools.ToolRegistry
 import com.pocketmind.tools.ToolRuntime
 import com.pocketmind.tools.ToolSpec
@@ -26,50 +25,13 @@ import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
 import java.io.Closeable
-import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 data class AgentReply(
     val text: String,
-    val actions: List<ActionResult> = emptyList(),
-    val confirmationId: String? = null
+    val actions: List<ActionResult> = emptyList()
 )
-
-/** Opaque, one-use, expiring handle for the exact plan shown in a confirmation dialog. */
-internal class ConfirmationLedger(private val elapsedMillis: () -> Long = { System.nanoTime() / 1_000_000L }) {
-    private data class Entry(val steps: List<PlanStep>, val createdAt: Long)
-    private val entries = linkedMapOf<String, Entry>()
-
-    fun issue(steps: List<PlanStep>): String {
-        prune()
-        while (entries.size >= MAX_PENDING) entries.remove(entries.keys.first())
-        val id = UUID.randomUUID().toString()
-        entries[id] = Entry(steps.toList(), elapsedMillis())
-        return id
-    }
-
-    fun consume(id: String): List<PlanStep>? {
-        val entry = entries.remove(id) ?: return null
-        val age = elapsedMillis() - entry.createdAt
-        return entry.steps.takeIf { age >= 0L && age <= TTL_MS }
-    }
-
-    fun clear() = entries.clear()
-
-    private fun prune() {
-        val now = elapsedMillis()
-        entries.entries.removeAll {
-            val age = now - it.value.createdAt
-            age < 0L || age > TTL_MS
-        }
-    }
-
-    private companion object {
-        const val MAX_PENDING = 8
-        const val TTL_MS = 5 * 60 * 1000L
-    }
-}
 
 /** Deterministic native-token budgeter. It never truncates or drops the current question. */
 object PromptBudget {
@@ -159,13 +121,41 @@ class AgentController(context: Context) : Closeable {
     private val engine = LlamaEngine()
     @Volatile private var loadedPath: String? = null
     private var contextSize = 512
-    private val pending = ConfirmationLedger()
+    private data class PendingClarification(val tool: String, val label: String? = null)
+    private var pendingClarification: PendingClarification? = null
     private val closed = AtomicBoolean(false)
 
     suspend fun send(text: String, onToken: (String) -> Unit = {}): AgentReply = withContext(dispatcher) {
         ensureOpen()
         val raw = text.trim()
         if (raw.isEmpty()) return@withContext AgentReply("Please enter a message.")
+
+        val clarificationIntent = pendingClarification
+        if (clarificationIntent != null) {
+            val followUpPlan = RuleEngine.clarificationFollowUpPlan(clarificationIntent.tool, raw, clarificationIntent.label)
+            if (followUpPlan != null) {
+                pendingClarification = null
+                val userId = messages.append("user", raw)
+                indexRecall(userId, raw)
+                val execution = executeValidatedPlan(listOf(followUpPlan))
+                val answer = renderActions(execution.results)
+                val assistantId = messages.append("assistant", answer)
+                indexRecall(assistantId, answer)
+                return@withContext AgentReply(answer, execution.results)
+            }
+            if (RuleEngine.looksLikeClarificationFollowUp(clarificationIntent.tool, raw)) {
+                messages.append("user", raw)
+                val answer = if (clarificationIntent.tool == "alarm.set") {
+                    "That time is invalid or incomplete. Please reply with a valid time including AM/PM, for example 6:30 pm."
+                } else {
+                    "That volume level is invalid. Please reply with a number from 0 to 100 percent."
+                }
+                messages.append("assistant", answer)
+                return@withContext AgentReply(answer)
+            }
+            // A message unrelated to the requested argument is a new request, not a reason to hijack chat.
+            pendingClarification = null
+        }
 
         val forget = Regex("(?i)^\\s*(forget|delete|remove)\\s+(?:my\\s+)?(?:memory\\s+about\\s+)?(.+?)\\s*$").matchEntire(raw)
         if (forget != null) {
@@ -212,43 +202,54 @@ class AgentController(context: Context) : Closeable {
                 messages.append("assistant", answer)
                 return@withContext AgentReply(answer)
             }
-            val execution = executeOrHold(rule)
+            val execution = executeValidatedPlan(rule)
             val answer = renderActions(execution.results)
             val assistantId = messages.append("assistant", answer)
             indexRecall(assistantId, answer)
             updateTopic(raw, execution.results)
-            return@withContext AgentReply(answer, execution.results, execution.confirmationId)
+            return@withContext AgentReply(answer, execution.results)
         }
 
         val clarification = RuleEngine.clarification(raw)
         if (clarification != null) {
+            val clarificationTarget = RuleEngine.clarificationTarget(raw)
+            if (clarificationTarget != null) {
+                val label = Regex("(?i)\\b(?:called|labelled|labeled)\\s+(.+?)\\s*$").find(raw)?.groupValues?.get(1)?.take(80)
+                pendingClarification = PendingClarification(clarificationTarget, label)
+            }
             messages.append("user", raw)
             messages.append("assistant", clarification)
             return@withContext AgentReply(clarification)
         }
 
+        val actionRequest = ActionRequestPolicy.looksLikeAction(raw)
         val modelPath = ModelStore(app).selected()?.absolutePath
         if (modelPath == null || loadedPath == null) {
             messages.append("user", raw)
-            val answer = "No model is loaded. Choose a compatible GGUF model in Models to chat or plan actions."
+            val answer = if (actionRequest) {
+                ActionRequestPolicy.noPlanReply(true, null) ?: ActionRequestPolicy.NO_SAFE_PLAN_REPLY
+            } else {
+                "No model is loaded. Choose a compatible GGUF model in Models to chat or plan actions."
+            }
+            if (actionRequest) recordPlanFailure(answer)
             messages.append("assistant", answer)
             return@withContext AgentReply(answer)
         }
         val userId = messages.append("user", raw)
         indexRecall(userId, raw)
 
-        val actionRequest = ActionRequestPolicy.looksLikeAction(raw)
         val plan = createActionPlan(resolved, raw)
         if (plan != null) {
-            val execution = executeOrHold(plan)
+            val execution = executeValidatedPlan(plan)
             val answer = renderActions(execution.results)
             val assistantId = messages.append("assistant", answer)
             indexRecall(assistantId, answer)
             updateTopic(raw, execution.results)
-            return@withContext AgentReply(answer, execution.results, execution.confirmationId)
+            return@withContext AgentReply(answer, execution.results)
         }
         val noPlanReply = ActionRequestPolicy.noPlanReply(actionRequest, plan)
         if (noPlanReply != null) {
+            recordPlanFailure(noPlanReply)
             val assistantId = messages.append("assistant", noPlanReply)
             indexRecall(assistantId, noPlanReply)
             return@withContext AgentReply(noPlanReply)
@@ -275,24 +276,6 @@ class AgentController(context: Context) : Closeable {
         AgentReply(response)
     }
 
-    suspend fun confirmPending(confirmationId: String, approved: Boolean): List<ActionResult> = withContext(dispatcher) {
-        ensureOpen()
-        val steps = pending.consume(confirmationId) ?: return@withContext emptyList()
-        if (!approved) {
-            return@withContext steps.map { step ->
-                val result = ActionResult(step.tool, ActionStatus.CANCELLED, "Not approved; nothing was run.", step.args)
-                actionLog.record(step.tool, step.tool, step.args.toString(), result.status.name, result.message)
-                result
-            }
-        }
-        val runtime = ToolRuntime(app, registry, validator)
-        try {
-            runtime.execute(steps, steps.map { it.tool }.toSet())
-        } finally {
-            runtime.close()
-        }
-    }
-
     suspend fun loadSelectedModel(): String = withContext(dispatcher) {
         ensureOpen()
         val file = ModelStore(app).selected() ?: return@withContext "No model is selected. Import a GGUF file first."
@@ -315,21 +298,18 @@ class AgentController(context: Context) : Closeable {
     fun stop() { try { engine.cancel() } catch (_: Throwable) { } }
     fun status(): String = if (loadedPath == null) "No model loaded" else "Model loaded · context $contextSize"
 
-    private data class ActionExecution(val results: List<ActionResult>, val confirmationId: String? = null)
+    private data class ActionExecution(val results: List<ActionResult>)
 
-    private fun executeOrHold(steps: List<PlanStep>): ActionExecution {
+    private fun executeValidatedPlan(steps: List<PlanStep>): ActionExecution {
         val invalid = validator.validatePlan(steps)
-        if (invalid != null) return ActionExecution(steps.map { ActionResult(it.tool, ActionStatus.FAILED, invalid, it.args) })
-        val lowRisk = steps.filter { registry.get(it.tool)?.risk == RiskLevel.LOW }
-        val needsApproval = steps.filter { registry.get(it.tool)?.risk != RiskLevel.LOW }
-        val immediate = if (lowRisk.isEmpty()) emptyList() else ToolRuntime(app, registry, validator).execute(lowRisk)
-        if (needsApproval.isEmpty()) return ActionExecution(immediate)
-        val confirmationId = pending.issue(needsApproval)
-        val waiting = needsApproval.map { step ->
-            actionLog.record(step.tool, step.tool, step.args.toString(), ActionStatus.PENDING_CONFIRMATION.name, "Waiting for explicit user approval.")
-            ActionResult(step.tool, ActionStatus.PENDING_CONFIRMATION, "Confirm before PocketMind runs this action.", step.args)
+        if (invalid != null) {
+            steps.forEach { step ->
+                try { actionLog.record(step.tool, step.tool, step.args.toString(), ActionStatus.FAILED.name, invalid) } catch (_: Exception) { }
+            }
+            return ActionExecution(steps.map { ActionResult(it.tool, ActionStatus.FAILED, invalid, it.args) })
         }
-        return ActionExecution(immediate + waiting, confirmationId)
+        val runtime = ToolRuntime(app, registry, validator)
+        return try { ActionExecution(runtime.execute(steps)) } finally { runtime.close() }
     }
 
     private fun renderActions(results: List<ActionResult>): String {
@@ -338,17 +318,19 @@ class AgentController(context: Context) : Closeable {
             when (result.status) {
                 ActionStatus.VERIFIED -> "${result.tool}: VERIFIED — ${result.message}"
                 ActionStatus.HANDED_OFF -> "${result.tool}: ${result.message}"
-                ActionStatus.PENDING_CONFIRMATION -> "${result.tool}: ${result.message}"
-                ActionStatus.CANCELLED -> "${result.tool}: cancelled; nothing was run."
                 ActionStatus.FAILED -> "${result.tool}: FAILED — ${result.message}"
             }
         }
     }
 
+    private fun recordPlanFailure(message: String) {
+        try { actionLog.record("action.plan", "action.plan", "{}", ActionStatus.FAILED.name, message) } catch (_: Exception) { }
+    }
+
     private fun plannerPrompt(question: String, tools: List<ToolSpec>) = buildString {
         append("Return only JSON matching {\"steps\":[{\"tool\":string,\"args\":object}]}. Make an action plan only if the request clearly asks for an action; otherwise return {\"steps\":[]}. Use at most 8 steps and only listed tool ids and arguments. Never explain or claim completion.\nAvailable tools:\n")
         tools.forEach { spec ->
-            append(spec.id).append(" (risk=").append(spec.risk).append("): ").append(spec.description)
+            append(spec.id).append(": ").append(spec.description)
             append("; args=").append(spec.args.joinToString { "${it.name}:${it.type.name}${if (it.required) " required" else " optional"}" }).append('\n')
         }
         append("User request: ").append(question).append("\nJSON:")
@@ -399,14 +381,12 @@ class AgentController(context: Context) : Closeable {
     private fun unloadInternal() {
         if (loadedPath != null) try { engine.unload() } catch (_: Throwable) { }
         loadedPath = null
-        pending.clear()
     }
 
     private fun ensureOpen() = check(!closed.get()) { "Agent controller is closed" }
 
     override fun close() {
         if (closed.compareAndSet(false, true)) {
-            pending.clear()
             stop()
             dispatcher.close()
             db.close()

@@ -21,6 +21,7 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -50,15 +51,12 @@ class ToolRuntime(
         if (databaseDelegate.isInitialized()) database.close()
     }
 
-    fun execute(steps: List<PlanStep>, approved: Set<String> = emptySet()): List<ActionResult> {
+    fun execute(steps: List<PlanStep>): List<ActionResult> {
         if (steps.size > 8) return listOf(ActionResult("", ActionStatus.FAILED, "Plan exceeds 8 steps"))
         return steps.map { step ->
             val invalid = validator.validate(step)
             if (invalid != null) return@map finish(step, ActionStatus.FAILED, invalid)
-            val spec = registry.get(step.tool) ?: return@map finish(step, ActionStatus.FAILED, "Unknown tool")
-            if (ToolApprovalPolicy.requiresApproval(spec.risk) && step.tool !in approved) {
-                return@map finish(step, ActionStatus.PENDING_CONFIRMATION, "Explicit approval is required before this action.")
-            }
+            if (registry.get(step.tool) == null) return@map finish(step, ActionStatus.FAILED, "Unknown tool")
             var result = perform(step)
             var attempts = 1
             val maximumAttempts = ToolExecutionRetryPolicy.maximumAttempts(step)
@@ -120,6 +118,7 @@ class ToolRuntime(
     private fun setAlarm(step: PlanStep): ActionResult {
         val hour = (step.args["hour"] as Number).toInt()
         val minute = (step.args["minute"] as Number).toInt()
+        val displayTime = LocalTime.of(hour, minute).format(DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault()))
         val intent = Intent(AlarmClock.ACTION_SET_ALARM)
             .putExtra(AlarmClock.EXTRA_HOUR, hour)
             .putExtra(AlarmClock.EXTRA_MINUTES, minute)
@@ -131,9 +130,9 @@ class ToolRuntime(
         val expectedMillis = target.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
         val observed = (app.getSystemService(Context.ALARM_SERVICE) as AlarmManager).nextAlarmClock?.triggerTime
         return if (observed != null && kotlin.math.abs(observed - expectedMillis) <= 90_000L) {
-            verified(step, "Alarm for ${"%02d:%02d".format(hour, minute)} verified by the system.")
+            verified(step, "Alarm for $displayTime verified by the system.")
         } else {
-            handoff(step, "The Clock app received the alarm request; Android did not expose a matching next alarm for verification.")
+            handoff(step, "The Clock app received the request for $displayTime; Android did not expose a matching next alarm for verification.")
         }
     }
 
@@ -208,7 +207,19 @@ class ToolRuntime(
     }
 
     private fun openApp(step: PlanStep, packageName: String): ActionResult {
-        val intent = app.packageManager.getLaunchIntentForPackage(packageName) ?: return failed(step, "No launchable app matched that package name.")
+        val packageManager = app.packageManager
+        var intent = packageManager.getLaunchIntentForPackage(packageName)
+        if (intent == null) {
+            val target = packageName.trim().removePrefix("the ").removeSuffix(" app")
+            val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            val matches = packageManager.queryIntentActivities(launcher, 0)
+                .filter { it.loadLabel(packageManager).toString().equals(target, ignoreCase = true) }
+                .distinctBy { it.activityInfo.packageName }
+            if (matches.size > 1) return failed(step, "More than one installed app is named '$target'; use an exact app name.")
+            val resolvedPackage = matches.singleOrNull()?.activityInfo?.packageName
+            intent = resolvedPackage?.let(packageManager::getLaunchIntentForPackage)
+        }
+        if (intent == null) return failed(step, "No launchable installed app matched '$packageName'.")
         app.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         return handoff(step, "Opened the requested app. Android handed the screen to it.")
     }

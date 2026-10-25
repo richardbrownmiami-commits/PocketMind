@@ -10,13 +10,11 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.pocketmind.PocketMindApplication
-import com.pocketmind.core.AgentReply
 import com.pocketmind.core.GenerationService
 import com.pocketmind.memory.AppDatabase
 import com.pocketmind.memory.MessageStore
@@ -131,7 +129,6 @@ class MainActivity : AppCompatActivity() {
                 }
                 adapter.update(answerRow, reply.text)
                 status.text = controller.status()
-                askForConfirmation(reply, answerRow)
             } catch (e: Exception) {
                 adapter.update(answerRow, "PocketMind could not finish: ${e.message ?: "unexpected error"}")
                 status.text = controller.status()
@@ -142,36 +139,6 @@ class MainActivity : AppCompatActivity() {
                 scrollToBottom()
             }
         }
-    }
-
-    private fun askForConfirmation(reply: AgentReply, row: Int) {
-        val pending = reply.actions.filter { it.status.name == "PENDING_CONFIRMATION" }
-        val confirmationId = reply.confirmationId ?: return
-        if (pending.isEmpty()) return
-        val names = pending.joinToString("\n") { "• ${it.tool}: ${it.args}" }
-        AlertDialog.Builder(this)
-            .setTitle("Confirm phone action")
-            .setMessage("PocketMind wants to run:\n$names\n\nContinue?")
-            .setPositiveButton("Run") { _, _ ->
-                uiScope.launch {
-                    val results = controller.confirmPending(confirmationId, true)
-                    val text = if (results.isEmpty()) "This confirmation expired or was already used; nothing was run."
-                    else results.joinToString("\n") { "${it.tool}: ${it.status} — ${it.message}" }
-                    adapter.update(row, listOf(reply.text, text).filter { it.isNotBlank() }.joinToString("\n"))
-                    status.text = controller.status()
-                    scrollToBottom()
-                }
-            }
-            .setNegativeButton("Cancel") { _, _ ->
-                uiScope.launch {
-                    val results = controller.confirmPending(confirmationId, false)
-                    val text = if (results.isEmpty()) "This confirmation expired or was already used; nothing was run."
-                    else results.joinToString("\n") { "${it.tool}: ${it.status} — ${it.message}" }
-                    adapter.update(row, listOf(reply.text, text).filter { it.isNotBlank() }.joinToString("\n"))
-                    scrollToBottom()
-                }
-            }
-            .show()
     }
 
     private fun scrollToBottom() {
