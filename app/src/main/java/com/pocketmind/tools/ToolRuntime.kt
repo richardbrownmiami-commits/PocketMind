@@ -17,6 +17,7 @@ import com.pocketmind.memory.ActionLogStore
 import com.pocketmind.memory.AppDatabase
 import com.pocketmind.memory.NoteStore
 import java.io.File
+import java.io.IOException
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
@@ -183,8 +184,15 @@ class ToolRuntime(
                 }
             }
             verified(step, message.trim())
+        } catch (e: IOException) {
+            val message = if (e.message?.contains("blocked", ignoreCase = true) == true) {
+                "The live search provider blocked this request; no live results were retrieved."
+            } else {
+                "Live web search failed, so no live results were retrieved. Check the Internet connection or try again."
+            }
+            failed(step, message)
         } catch (_: Exception) {
-            failed(step, "Live web search is unavailable right now. Check the Internet connection or try again.")
+            failed(step, "Live web search failed, so no live results were retrieved. Please try again.")
         }
     }
 
@@ -195,18 +203,10 @@ class ToolRuntime(
         val dayOffset = (step.args["daysFromToday"] as? Number)?.toInt()
         val label = (step.args["label"] as? String)?.take(80)
         if (dayOffset == 1) {
-            val target = LocalDate.now().plusDays(1).atTime(hour, minute)
-            val triggerAtMillis = target.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
-            if (!ScheduledAlarmScheduler.notificationsEnabled(app)) {
-                val settings = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-                    .putExtra(Settings.EXTRA_APP_PACKAGE, app.packageName)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                if (settings.resolveActivity(app.packageManager) != null) app.startActivity(settings)
-                return handoff(step, "Enable notifications for PocketMind in Android settings, then send the alarm request again.")
-            }
-            ScheduledAlarmScheduler.schedule(app, triggerAtMillis, label)
-            val displayDate = target.format(DateTimeFormatter.ofPattern("EEEE, MMMM d", Locale.getDefault()))
-            return verified(step, "PocketMind alarm scheduled for $displayDate at $displayTime. It will alert with an Android alarm notification.")
+            return failed(
+                step,
+                "Android Clock's alarm action cannot specify a one-time calendar date. I did not set an alarm for tomorrow; please set a one-time alarm for tomorrow directly in Clock."
+            )
         }
         if (dayOffset == 0 && !LocalDate.now().atTime(hour, minute).isAfter(LocalDateTime.now())) {
             return failed(step, "That time has already passed today; choose a later time or tomorrow.")
