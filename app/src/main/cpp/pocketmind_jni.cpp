@@ -3,12 +3,10 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <string>
 #include <sys/stat.h>
-#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -17,8 +15,6 @@ llama_model *g_model = nullptr;
 llama_context *g_context = nullptr;
 std::atomic<bool> g_cancelled{false};
 std::atomic<bool> g_generating{false};
-std::atomic<bool> g_memoryAbort{false};
-constexpr uint64_t kMaxResidentBytes = 1024ULL * 1024ULL * 1024ULL;
 
 void throwJava(JNIEnv *env, const char *message, const char *type = "java/lang/IllegalStateException") {
     jclass cls = env->FindClass(type);
@@ -88,32 +84,8 @@ jstring newJavaString(JNIEnv *env, const std::string &value) {
     return env->NewString(chars.data(), static_cast<jsize>(chars.size()));
 }
 
-bool overMemoryLimit() {
-    FILE *statm = std::fopen("/proc/self/statm", "r");
-    if (statm == nullptr) return false;
-    unsigned long virtualPages = 0;
-    unsigned long residentPages = 0;
-    const int parsed = std::fscanf(statm, "%lu %lu", &virtualPages, &residentPages);
-    std::fclose(statm);
-    const long pageSize = sysconf(_SC_PAGESIZE);
-    const long totalPages = sysconf(_SC_PHYS_PAGES);
-    if (parsed != 2 || pageSize <= 0) return false;
-    uint64_t limit = kMaxResidentBytes;
-    if (totalPages > 0) {
-        const uint64_t total = static_cast<uint64_t>(totalPages) * static_cast<uint64_t>(pageSize);
-        limit = std::min(limit, total * 70ULL / 100ULL);
-    }
-    return static_cast<uint64_t>(residentPages) * static_cast<uint64_t>(pageSize) > limit;
-}
-
 bool abortCallback(void *) {
-    if (g_cancelled.load()) return true;
-    if (overMemoryLimit()) {
-        g_memoryAbort.store(true);
-        g_cancelled.store(true);
-        return true;
-    }
-    return false;
+    return g_cancelled.load();
 }
 
 int tokenize(const llama_vocab *vocab, const std::string &text, std::vector<llama_token> &tokens, bool addSpecial) {
@@ -192,7 +164,6 @@ Java_com_pocketmind_engine_LlamaEngine_nativeGenerate(JNIEnv *env, jobject, jstr
     if (!g_generating.compare_exchange_strong(expected, true)) { throwJava(env, "A generation is already in progress"); return nullptr; }
     struct Reset { ~Reset() { g_generating.store(false); } } reset;
     g_cancelled.store(false);
-    g_memoryAbort.store(false);
     const std::string prompt = toUtf8(env, jprompt);
     const std::string grammar = toUtf8(env, jgrammar);
     const llama_vocab *vocab = llama_model_get_vocab(g_model);
@@ -269,7 +240,6 @@ Java_com_pocketmind_engine_LlamaEngine_nativeGenerate(JNIEnv *env, jobject, jstr
     llama_sampler_free(sampler);
     llama_batch_free(batch);
     if (env->ExceptionCheck()) return nullptr;
-    if (g_memoryAbort.exchange(false)) { throwJava(env, "Generation stopped to remain within the device memory safety limit"); return nullptr; }
     return newJavaString(env, generated);
 }
 
