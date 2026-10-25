@@ -20,10 +20,13 @@ import com.pocketmind.memory.AppDatabase
 import com.pocketmind.memory.MessageStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : AppCompatActivity() {
     private val uiScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -35,6 +38,37 @@ class MainActivity : AppCompatActivity() {
     private lateinit var send: Button
     private lateinit var stop: Button
     private val handler = Handler(Looper.getMainLooper())
+    private val thinkingMessages = listOf(
+        "Sooch raha hoon…",
+        "Aur zor se sooch raha hoon…",
+        "Dimag ki nassein phad raha hoon…",
+        "Kya pooch liya yaar…",
+        "Abhi batata hoon, ruk…",
+        "Ek second, dimag daud raha hai…",
+        "Bahut gehri baat hai yeh…",
+        "Processing kar raha hoon…"
+    )
+    private var thinkingJob: Job? = null
+    private var thinkingIndex = 0
+    @Volatile private var activityDestroyed = false
+
+    private fun startThinking() {
+        thinkingIndex = 0
+        thinkingJob?.cancel()
+        thinkingJob = uiScope.launch {
+            while (true) {
+                if (activityDestroyed) break
+                status.text = thinkingMessages[thinkingIndex % thinkingMessages.size]
+                thinkingIndex++
+                delay(1800)
+            }
+        }
+    }
+
+    private fun stopThinking() {
+        thinkingJob?.cancel()
+        thinkingJob = null
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -118,25 +152,35 @@ class MainActivity : AppCompatActivity() {
         scrollToBottom()
         send.isEnabled = false
         stop.isEnabled = true
-        status.text = "Working on device…"
+        startThinking()
         try { ContextCompat.startForegroundService(this, Intent(this, GenerationService::class.java).setAction(GenerationService.ACTION_START)) }
         catch (_: Exception) { }
         val streamed = StringBuilder()
+        val firstToken = AtomicBoolean(false)
         uiScope.launch {
             try {
                 val reply = controller.send(text) { chunk ->
-                    handler.post { streamed.append(chunk); adapter.update(answerRow, streamed.toString()); scrollToBottom() }
+                    if (firstToken.compareAndSet(false, true)) handler.post { if (!activityDestroyed) stopThinking() }
+                    handler.post {
+                        if (!activityDestroyed) {
+                            streamed.append(chunk)
+                            adapter.update(answerRow, streamed.toString())
+                            scrollToBottom()
+                        }
+                    }
                 }
-                adapter.update(answerRow, reply.text)
-                status.text = controller.status()
+                if (!activityDestroyed) adapter.update(answerRow, reply.text)
             } catch (e: Exception) {
-                adapter.update(answerRow, "PocketMind could not finish: ${e.message ?: "unexpected error"}")
-                status.text = controller.status()
+                if (!activityDestroyed) adapter.update(answerRow, "PocketMind could not finish: ${e.message ?: "unexpected error"}")
             } finally {
-                send.isEnabled = true
-                stop.isEnabled = false
+                stopThinking()
+                if (!activityDestroyed) status.text = controller.status()
+                if (!activityDestroyed) {
+                    send.isEnabled = true
+                    stop.isEnabled = false
+                }
                 stopService(Intent(this@MainActivity, GenerationService::class.java))
-                scrollToBottom()
+                if (!activityDestroyed) scrollToBottom()
             }
         }
     }
@@ -151,6 +195,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        activityDestroyed = true
+        stopThinking()
         uiScope.cancel()
         super.onDestroy()
     }

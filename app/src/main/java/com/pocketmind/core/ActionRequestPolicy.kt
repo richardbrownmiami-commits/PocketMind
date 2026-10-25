@@ -10,7 +10,8 @@ internal object ActionRequestPolicy {
     const val NO_SAFE_PLAN_REPLY =
         "I couldn't safely create a valid action plan for that request. Nothing was run or changed. Please rephrase it with the action and any required details."
 
-    fun looksLikeAction(text: String): Boolean {
+    fun looksLikeAction(text: String, ruleMatched: Boolean = false): Boolean {
+        if (ruleMatched) return false
         val clean = text.trim()
         if (Regex("(?i)^(?:how (?:do|can|would) i|what if|why did|why should(?:n't| not)|should i|can i|could i|is it possible|explain|tell me how|show me how)\\b").containsMatchIn(clean)) return false
         if (Regex("(?i)^\\s*(?:i\\s+(?:don't|do not|dont)\\s+(?:want|need)|(?:don't|do not|dont|never)|cancel)\\b").containsMatchIn(clean)) return false

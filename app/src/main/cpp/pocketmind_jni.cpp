@@ -248,7 +248,6 @@ Java_com_pocketmind_engine_LlamaEngine_nativeGenerate(JNIEnv *env, jobject, jstr
     const int basePosition = static_cast<int>(tokens.size());
     for (int i = 0; i < generationLimit && !g_cancelled.load() && !env->ExceptionCheck(); ++i) {
         const llama_token token = llama_sampler_sample(sampler, g_context, -1);
-        llama_sampler_accept(sampler, token);
         if (llama_vocab_is_eog(vocab, token)) break;
         std::vector<char> piece(256);
         int nPiece = llama_token_to_piece(vocab, token, piece.data(), static_cast<int32_t>(piece.size()), 0, true);

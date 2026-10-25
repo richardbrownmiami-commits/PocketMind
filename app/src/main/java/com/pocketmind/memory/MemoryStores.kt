@@ -234,7 +234,7 @@ class ActionLogStore(private val db: SQLiteDatabase) {
             else -> message.take(180)
         }
         val values = ContentValues().apply {
-            put("request", tool.take(100)); put("tool", tool.take(100)); put("args", safeArgs)
+            put("request", request.trim().take(500)); put("tool", tool.take(100)); put("args", safeArgs)
             put("outcome", outcome.take(180)); put("message", safeMessage); put("created", System.currentTimeMillis())
         }
         db.insert("action_log", null, values)

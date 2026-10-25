@@ -37,26 +37,36 @@ internal object ToolExecutionRetryPolicy {
 
 class ToolRuntime(
     private val context: Context,
-    private val registry: ToolRegistry = ToolRegistry(),
+    private val registry: ToolRegistry,
     private val validator: ToolValidator = ToolValidator(registry),
-    databaseName: String = "pocketmind_memory.db"
+    private val sharedDatabase: AppDatabase? = null,
+    private val databaseName: String = DEFAULT_DATABASE_NAME
 ) {
     private val app = context.applicationContext
-    private val databaseDelegate = lazy { AppDatabase(app, databaseName) }
+    private val usesScratchDatabase = databaseName != DEFAULT_DATABASE_NAME
+    init {
+        require(usesScratchDatabase || sharedDatabase != null) {
+            "The normal chat database must be shared with AgentController."
+        }
+    }
+    private val databaseDelegate = lazy {
+        if (usesScratchDatabase) AppDatabase(app, databaseName)
+        else sharedDatabase!!
+    }
     private val database by databaseDelegate
     private val notes by lazy { NoteStore(database) }
     private val actions by lazy { ActionLogStore(database) }
 
     fun close() {
-        if (databaseDelegate.isInitialized()) database.close()
+        if (usesScratchDatabase && databaseDelegate.isInitialized()) database.close()
     }
 
-    fun execute(steps: List<PlanStep>): List<ActionResult> {
+    fun execute(steps: List<PlanStep>, originalRequest: String): List<ActionResult> {
         if (steps.size > 8) return listOf(ActionResult("", ActionStatus.FAILED, "Plan exceeds 8 steps"))
         return steps.map { step ->
             val invalid = validator.validate(step)
-            if (invalid != null) return@map finish(step, ActionStatus.FAILED, invalid)
-            if (registry.get(step.tool) == null) return@map finish(step, ActionStatus.FAILED, "Unknown tool")
+            if (invalid != null) return@map finish(step, originalRequest, ActionStatus.FAILED, invalid)
+            if (registry.get(step.tool) == null) return@map finish(step, originalRequest, ActionStatus.FAILED, "Unknown tool")
             var result = perform(step)
             var attempts = 1
             val maximumAttempts = ToolExecutionRetryPolicy.maximumAttempts(step)
@@ -64,16 +74,15 @@ class ToolRuntime(
                 attempts++
                 result = perform(step)
             }
-            finish(step, result.status, result.message)
+            finish(step, originalRequest, result.status, result.message)
         }
     }
 
-    private fun finish(step: PlanStep, status: ActionStatus, message: String): ActionResult {
+    private fun finish(step: PlanStep, originalRequest: String, status: ActionStatus, message: String): ActionResult {
         val result = ActionResult(step.tool, status, message, step.args)
         try {
             val safeArgs = step.args.entries.joinToString(prefix = "{", postfix = "}") { "${it.key}=${it.value}" }.take(500)
-            // Never persist the raw user utterance; request is only a registry tool id.
-            actions.record(step.tool, step.tool, safeArgs, status.name, message)
+            actions.record(originalRequest, step.tool, safeArgs, status.name, message)
         } catch (_: Exception) { }
         return result
     }
@@ -249,4 +258,8 @@ class ToolRuntime(
     private fun verified(step: PlanStep, message: String) = ActionResult(step.tool, ActionStatus.VERIFIED, message, step.args)
     private fun handoff(step: PlanStep, message: String) = ActionResult(step.tool, ActionStatus.HANDED_OFF, message, step.args)
     private fun failed(step: PlanStep, message: String) = ActionResult(step.tool, ActionStatus.FAILED, message, step.args)
+
+    companion object {
+        private const val DEFAULT_DATABASE_NAME = "pocketmind_memory.db"
+    }
 }
