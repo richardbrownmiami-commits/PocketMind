@@ -1,5 +1,6 @@
 package com.pocketmind.diagnostics
 
+import com.pocketmind.BuildConfig
 import com.pocketmind.tools.RuleEngine
 import com.pocketmind.tools.ToolRegistry
 import com.pocketmind.tools.ToolValidator
@@ -14,6 +15,12 @@ class SyntheticFeatureRouteQaTest {
         val toolIds = ToolRegistry().all.map { it.id }.toSet()
         assertEquals(toolIds, SyntheticFeatureRouteQa.probes.map { it.toolId }.toSet())
         assertEquals(SyntheticFeatureRouteQa.probes.size, SyntheticFeatureRouteQa.probes.map { it.toolId }.toSet().size)
+    }
+
+    @Test fun syntheticAppOpenProbeTargetsThisBuildVariant() {
+        val probe = SyntheticFeatureRouteQa.probes.single { it.toolId == "app.open" }
+        assertEquals(BuildConfig.APPLICATION_ID, probe.expectedArguments["package"])
+        assertTrue(probe.prompt.contains(BuildConfig.APPLICATION_ID))
     }
 
     @Test fun deterministicFeaturePromptsRouteToValidExpectedPlansWithoutExecutingThem() {

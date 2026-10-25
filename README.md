@@ -11,9 +11,9 @@ Requirements: JDK 17, Android SDK platform 35/build-tools 35.0.0, NDK 27.2.12479
 gradle testDebugUnitTest assembleDebug
 ```
 
-The checked-in GitHub Actions workflow installs the pinned Android toolchain, fetches the pinned llama.cpp source, runs JVM tests, builds the APK, and checks the APK's native ABI, app ID, version, API levels, and offline permission contract. Each artifact is tagged with its source commit and includes its APK checksum and signing-certificate fingerprint. This build is PocketMind `0.1.1` (`versionCode` 2); the prior version was not removed.
+The checked-in GitHub Actions workflow installs the pinned Android toolchain, fetches the pinned llama.cpp source, runs JVM tests, builds the APK, and checks the APK's native ABI, app ID, version, API levels, and offline permission contract. Each artifact is tagged with its source commit and includes its APK checksum and signing-certificate fingerprint. The debug artifact is **PocketMind Test** (`com.pocketmind.test`), version `0.1.1` (`versionCode` 2). It installs beside, not over, the regular PocketMind app (`com.pocketmind`) and does not access or change the regular app's local data. The test copy has separate storage, so import a GGUF model into it before testing; its chats, notes, and settings are also separate. The earlier app version remains intact.
 
-Android only updates an installed app when the package ID matches, the new `versionCode` is higher, and the signing certificate is the same. These CI artifacts are debug-signed on hosted runners, whose generated debug keys may differ between runs; therefore an artifact from a newer run is not necessarily installable over an older CI artifact. No persistent release-signing key is configured yet. If Android reports a signature mismatch, do not uninstall an existing copy unless you accept losing its local chats, notes, and imported model; `allowBackup` is disabled.
+Debug builds are signed with the hosted runner's debug key, which can vary between runs. The commit-specific artifact name and embedded build information identify exactly which APK is being tested; Android may not accept a later debug artifact as an in-place update to an earlier **test** copy. This does not affect the separately installed regular PocketMind app.
 
 ## In-app tester
 

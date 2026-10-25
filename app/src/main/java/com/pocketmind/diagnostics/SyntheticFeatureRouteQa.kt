@@ -1,5 +1,6 @@
 package com.pocketmind.diagnostics
 
+import com.pocketmind.BuildConfig
 import com.pocketmind.tools.PlanStep
 import com.pocketmind.tools.ToolValidator
 
@@ -29,7 +30,7 @@ internal object SyntheticFeatureRouteQa {
         SyntheticFeatureRouteProbe("volume", "Raise the media volume", mapOf("step" to 1)),
         SyntheticFeatureRouteProbe("brightness", "Set display brightness to 128", mapOf("level" to 128)),
         SyntheticFeatureRouteProbe("battery/status", "Check battery status"),
-        SyntheticFeatureRouteProbe("app.open", "Open the app with package com.pocketmind", mapOf("package" to "com.pocketmind")),
+        SyntheticFeatureRouteProbe("app.open", "Open the app with package ${BuildConfig.APPLICATION_ID}", mapOf("package" to BuildConfig.APPLICATION_ID)),
         SyntheticFeatureRouteProbe("app.search", "Search for the installed app named PocketMind", mapOf("query" to "PocketMind")),
         SyntheticFeatureRouteProbe("wifi.settings", "Open Wi-Fi settings"),
         SyntheticFeatureRouteProbe("bluetooth.settings", "Open Bluetooth settings"),

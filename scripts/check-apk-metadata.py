@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the release identity and offline/API contract embedded in a built APK."""
+"""Verify app identity and offline/API contract embedded in a built APK."""
 import argparse
 import os
 import re
@@ -11,6 +11,7 @@ from pathlib import Path
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("apk", type=Path)
+    parser.add_argument("--application-id", default="com.pocketmind.test")
     parser.add_argument("--version-code", type=int, required=True)
     parser.add_argument("--version-name", required=True)
     args = parser.parse_args()
@@ -26,7 +27,7 @@ def main() -> None:
     if package is None:
         raise SystemExit("APK manifest has no readable package/version metadata")
     actual_package, code, name = package.groups()
-    if actual_package != "com.pocketmind":
+    if actual_package != args.application_id:
         raise SystemExit(f"Wrong applicationId in APK: {actual_package}")
     if int(code) != args.version_code or name != args.version_name:
         raise SystemExit(f"Wrong APK version: found {name} ({code}), expected {args.version_name} ({args.version_code})")
