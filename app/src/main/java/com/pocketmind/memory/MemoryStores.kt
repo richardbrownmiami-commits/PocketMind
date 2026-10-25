@@ -225,7 +225,7 @@ class ActionLogStore(private val db: SQLiteDatabase) {
     constructor(helper: AppDatabase) : this(helper.writableDatabase)
 
     fun record(request: String, tool: String, argsJson: String, outcome: String, message: String) {
-        val safeArgs = Regex("(?:hour|minute|seconds|level|step|index|enabled)=([^,}]+)").findAll(argsJson)
+        val safeArgs = Regex("(?:hour|minute|daysFromToday|seconds|level|step|index|enabled)=([^,}]+)").findAll(argsJson)
             .joinToString(prefix = "{", postfix = "}") { "${it.groupValues[0]}" }.take(500)
         val safeMessage = when (tool) {
             "note.save" -> "Saved note and verified read-back."
@@ -237,7 +237,7 @@ class ActionLogStore(private val db: SQLiteDatabase) {
             put("request", request.trim().take(500)); put("tool", tool.take(100)); put("args", safeArgs)
             put("outcome", outcome.take(180)); put("message", safeMessage); put("created", System.currentTimeMillis())
         }
-        db.insert("action_log", null, values)
+        check(db.insert("action_log", null, values) > 0L) { "SQLite did not insert the action log row" }
         db.execSQL("DELETE FROM action_log WHERE id NOT IN (SELECT id FROM action_log ORDER BY id DESC LIMIT 200)")
     }
 

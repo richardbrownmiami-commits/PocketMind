@@ -62,7 +62,9 @@ class ToolRuntime(
     }
 
     fun execute(steps: List<PlanStep>, originalRequest: String): List<ActionResult> {
-        if (steps.size > 8) return listOf(ActionResult("", ActionStatus.FAILED, "Plan exceeds 8 steps"))
+        if (steps.size > 8) {
+            return listOf(finish(PlanStep("action.plan", emptyMap()), originalRequest, ActionStatus.FAILED, "Plan exceeds 8 steps"))
+        }
         return steps.map { step ->
             val invalid = validator.validate(step)
             if (invalid != null) return@map finish(step, originalRequest, ActionStatus.FAILED, invalid)
@@ -83,8 +85,11 @@ class ToolRuntime(
         try {
             val safeArgs = step.args.entries.joinToString(prefix = "{", postfix = "}") { "${it.key}=${it.value}" }.take(500)
             actions.record(originalRequest, step.tool, safeArgs, status.name, message)
-        } catch (_: Exception) { }
-        return result
+            return result
+        } catch (e: Exception) {
+            val reason = e.message?.take(120) ?: "database write failed"
+            return result.copy(message = "$message SQL action log could not be saved: $reason.")
+        }
     }
 
     private fun perform(step: PlanStep): ActionResult {
@@ -128,18 +133,39 @@ class ToolRuntime(
         val hour = (step.args["hour"] as Number).toInt()
         val minute = (step.args["minute"] as Number).toInt()
         val displayTime = LocalTime.of(hour, minute).format(DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault()))
+        val dayOffset = (step.args["daysFromToday"] as? Number)?.toInt()
+        val label = (step.args["label"] as? String)?.take(80)
+        if (dayOffset == 1) {
+            val target = LocalDate.now().plusDays(1).atTime(hour, minute)
+            val triggerAtMillis = target.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+            if (!ScheduledAlarmScheduler.notificationsEnabled(app)) {
+                val settings = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(Settings.EXTRA_APP_PACKAGE, app.packageName)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                if (settings.resolveActivity(app.packageManager) != null) app.startActivity(settings)
+                return handoff(step, "Enable notifications for PocketMind in Android settings, then send the alarm request again.")
+            }
+            ScheduledAlarmScheduler.schedule(app, triggerAtMillis, label)
+            val displayDate = target.format(DateTimeFormatter.ofPattern("EEEE, MMMM d", Locale.getDefault()))
+            return verified(step, "PocketMind alarm scheduled for $displayDate at $displayTime. It will alert with an Android alarm notification.")
+        }
+        if (dayOffset == 0 && !LocalDate.now().atTime(hour, minute).isAfter(LocalDateTime.now())) {
+            return failed(step, "That time has already passed today; choose a later time or tomorrow.")
+        }
         val intent = Intent(AlarmClock.ACTION_SET_ALARM)
             .putExtra(AlarmClock.EXTRA_HOUR, hour)
             .putExtra(AlarmClock.EXTRA_MINUTES, minute)
             .putExtra(AlarmClock.EXTRA_SKIP_UI, true)
-        (step.args["label"] as? String)?.let { intent.putExtra(AlarmClock.EXTRA_MESSAGE, it.take(80)) }
+        label?.let { intent.putExtra(AlarmClock.EXTRA_MESSAGE, it) }
         if (intent.resolveActivity(app.packageManager) == null) return failed(step, "No Clock app can handle an alarm.")
         app.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        val target = LocalDate.now().atTime(hour, minute).let { if (!it.isAfter(LocalDateTime.now())) it.plusDays(1) else it }
+        val target = LocalDate.now().plusDays((dayOffset ?: 0).toLong()).atTime(hour, minute)
+            .let { if (dayOffset == null && !it.isAfter(LocalDateTime.now())) it.plusDays(1) else it }
         val expectedMillis = target.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
         val observed = (app.getSystemService(Context.ALARM_SERVICE) as AlarmManager).nextAlarmClock?.triggerTime
         return if (observed != null && kotlin.math.abs(observed - expectedMillis) <= 90_000L) {
-            verified(step, "Alarm for $displayTime verified by the system.")
+            val day = if (dayOffset == 0) " today" else ""
+            verified(step, "Alarm for $displayTime$day verified by the system.")
         } else {
             handoff(step, "The Clock app received the request for $displayTime; Android did not expose a matching next alarm for verification.")
         }

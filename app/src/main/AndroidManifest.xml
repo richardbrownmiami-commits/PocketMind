@@ -4,6 +4,8 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <queries>
         <intent>
@@ -28,6 +30,12 @@
         android:supportsRtl="true">
         <activity android:name=".ui.MemoryActivity" android:exported="false" />
         <activity android:name=".ui.ModelsActivity" android:exported="false" />
+        <receiver android:name=".tools.ScheduledAlarmReceiver" android:exported="false" />
+        <receiver android:name=".tools.ScheduledAlarmBootReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
         <service
             android:name=".core.GenerationService"
             android:exported="false"

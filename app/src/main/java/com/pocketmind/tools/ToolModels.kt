@@ -30,7 +30,7 @@ class ToolRegistry(val all: List<ToolSpec> = defaults) {
             ToolSpec("clock.time", "Read the current local time", emptyList(), RiskLevel.LOW), ToolSpec("clock.date", "Read today's local date", emptyList(), RiskLevel.LOW),
             ToolSpec("math.calculate", "Evaluate basic arithmetic", listOf(ArgSpec("expression", ArgType.STRING)), RiskLevel.LOW),
             ToolSpec("note.save", "Save a note", listOf(ArgSpec("text", ArgType.STRING)), RiskLevel.LOW), ToolSpec("note.list", "List saved notes", emptyList(), RiskLevel.LOW), ToolSpec("note.search", "Search saved notes", listOf(ArgSpec("query", ArgType.STRING)), RiskLevel.LOW),
-            ToolSpec("alarm.set", "Set an alarm", listOf(ArgSpec("hour", ArgType.INTEGER), ArgSpec("minute", ArgType.INTEGER), ArgSpec("label", ArgType.STRING, false)), RiskLevel.HIGH),
+            ToolSpec("alarm.set", "Set an alarm", listOf(ArgSpec("hour", ArgType.INTEGER), ArgSpec("minute", ArgType.INTEGER), ArgSpec("daysFromToday", ArgType.INTEGER, false), ArgSpec("label", ArgType.STRING, false)), RiskLevel.HIGH),
             ToolSpec("timer.set", "Start a timer", listOf(ArgSpec("seconds", ArgType.INTEGER)), RiskLevel.MEDIUM),
             ToolSpec("flashlight", "Turn flashlight on or off", listOf(ArgSpec("enabled", ArgType.BOOLEAN)), RiskLevel.MEDIUM),
             ToolSpec("volume", "Set media volume to a percentage or adjust it one step", listOf(ArgSpec("level", ArgType.INTEGER, false), ArgSpec("step", ArgType.INTEGER, false)), RiskLevel.MEDIUM), ToolSpec("brightness", "Change display brightness", listOf(ArgSpec("level", ArgType.INTEGER)), RiskLevel.HIGH),
@@ -59,6 +59,7 @@ class ToolValidator(private val registry: ToolRegistry = ToolRegistry()) {
             if (v is String && v.length > 4000) return "Argument is too long: ${arg.name}"
         }
         if (step.tool == "alarm.set" && (((step.args["hour"] as Number).toLong() !in 0L..23L) || ((step.args["minute"] as Number).toLong() !in 0L..59L))) return "Alarm time out of range"
+        if (step.tool == "alarm.set" && step.args["daysFromToday"] != null && (step.args["daysFromToday"] as Number).toLong() !in 0L..1L) return "Alarm date must be today or tomorrow"
         if (step.tool == "timer.set" && ((step.args["seconds"] as Number).toLong() !in 1L..86400L)) return "Timer seconds out of range"
         if (step.tool == "volume") {
             val hasLevel = step.args.containsKey("level")

@@ -73,7 +73,7 @@ object RuleEngine {
         RegexOption.IGNORE_CASE
     )
     private val unsupportedAlarmDate = Regex(
-        "\\b(?:tomorrow|next\\s+(?:week|month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|on\\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|\\d{4}-\\d{1,2}-\\d{1,2})\\b",
+        "\\b(?:next\\s+(?:week|month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|on\\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|\\d{4}-\\d{1,2}-\\d{1,2})\\b",
         RegexOption.IGNORE_CASE
     )
     private val numberWords = mapOf(
@@ -152,10 +152,10 @@ object RuleEngine {
             .replace(Regex("\\s+(?:please|thanks|thank you)$", RegexOption.IGNORE_CASE), "")
         if (command.isEmpty()) return null
 
-        if (Regex("^(?:what(?:'s| is) the (?:current )?time(?: now)?|what time(?: is it)?(?: now)?|tell me (?:the )?(?:current )?time(?: now)?|tell me what time (?:it is|it is now)|show me the time|check (?:the )?time|current time|get (?:the )?(?:current )?time|time now|give me the time)$", RegexOption.IGNORE_CASE).matches(command)) {
+        if (Regex("^(?:what(?:'s| is) (?:the )?(?:current )?time(?: now)?|what time(?: is it)?(?: now)?|tell me (?:the )?(?:current )?time(?: now)?|tell me what time (?:it is|it is now)|show me the time|check (?:the )?time|current time|get (?:the )?(?:current )?time|time now|give me the time)$", RegexOption.IGNORE_CASE).matches(command)) {
             return checkedPlan("clock.time", emptyMap())
         }
-        if (Regex("^(?:what(?:'s| is) (?:today's|the) date(?: today)?|what date is it(?: today)?|what day is it(?: today)?|today's date|current date|show me (?:today's )?date|tell me (?:today's |current )?date|tell me what (?:today's )?date it is|get (?:today's |current )?date)$", RegexOption.IGNORE_CASE).matches(command)) {
+        if (Regex("^(?:what(?:'s| is) (?:(?:today's|the) )?(?:current )?date(?: today)?|what date is it(?: today)?|what day is it(?: today)?|today's date|current date|show me (?:today's )?date|tell me (?:today's |current )?date|tell me what (?:today's )?date it is|get (?:today's |current )?date)$", RegexOption.IGNORE_CASE).matches(command)) {
             return checkedPlan("clock.date", emptyMap())
         }
 
@@ -209,12 +209,18 @@ object RuleEngine {
     private fun alarmPlan(clean: String): PlanStep? {
         if (!isAlarmCommand(clean)) return null
         if (unsupportedAlarmDate.containsMatchIn(clean)) return null
+        val dayOffset = when {
+            Regex("\\btomorrow\\b", RegexOption.IGNORE_CASE).containsMatchIn(clean) -> 1
+            Regex("\\btoday\\b", RegexOption.IGNORE_CASE).containsMatchIn(clean) -> 0
+            else -> null
+        }
 
         val labelMatch = Regex("\\b(?:called|labelled|labeled|named)\\s+(.+)$", RegexOption.IGNORE_CASE).find(clean)
         val label = labelMatch?.groupValues?.get(1)?.trim()?.trimEnd('.', '!', '?')?.take(80)
         var timeText = if (labelMatch == null) clean else clean.substring(0, labelMatch.range.first)
+        timeText = Regex("(?i)\\b(?:today|tomorrow)\\b").replace(timeText, " ")
         timeText = Regex("(?i)\\b(?:set|create|add|make|wake|me|up|alarm|clock|please|a|an|the|my)\\b").replace(timeText, " ")
-        timeText = Regex("(?i)\\b(?:for|at|to)\\b").replace(timeText, " ")
+        timeText = Regex("(?i)\\b(?:for|at|to|of)\\b").replace(timeText, " ")
         val found = clockToken.findAll(timeText).toList()
         if (found.size != 1) return null
         val timeMatch = found.single()
@@ -223,6 +229,7 @@ object RuleEngine {
         val parsed = clockTime(timeMatch.groupValues[1], timeMatch.groupValues[2], timeMatch.groupValues[3]) ?: return null
         if (parsed.needsMeridiem) return null
         val args = mutableMapOf<String, Any?>("hour" to parsed.hour, "minute" to parsed.minute)
+        dayOffset?.let { args["daysFromToday"] = it }
         label?.takeIf { it.isNotBlank() }?.let { args["label"] = it }
         return checkedStep("alarm.set", args)
     }
@@ -412,25 +419,39 @@ object RuleEngine {
     }
 
     private fun mathPlan(command: String): PlanStep? {
+        val percentageOf = Regex(
+            "^(?:(?:what is|what's|how much(?: is)?)\\s+)?(.+?)\\s*%\\s+of\\s+(.+?)[?.!]*$",
+            RegexOption.IGNORE_CASE
+        ).matchEntire(command)
         val arithmetic = Regex("^(add|sum|subtract|multiply|divide)\\s+(.+?)\\s+(and|to|from|by)\\s+(.+?)[?.!]*$", RegexOption.IGNORE_CASE).matchEntire(command)
-        var expression = if (arithmetic != null) {
-            val verb = arithmetic.groupValues[1].lowercase(Locale.ROOT)
-            val first = arithmetic.groupValues[2].trim()
-            val connector = arithmetic.groupValues[3].lowercase(Locale.ROOT)
-            val second = arithmetic.groupValues[4].trim()
-            when {
-                verb in setOf("add", "sum") && connector in setOf("and", "to") -> "$first + $second"
-                verb == "subtract" && connector == "from" -> "$second - $first"
-                verb == "multiply" && connector in setOf("and", "by") -> "$first * $second"
-                verb == "divide" && connector == "by" -> "$first / $second"
-                else -> return null
+        var expression = when {
+            percentageOf != null -> "(${percentageOf.groupValues[1]}) / 100 * (${percentageOf.groupValues[2]})"
+            arithmetic != null -> {
+                val verb = arithmetic.groupValues[1].lowercase(Locale.ROOT)
+                val first = arithmetic.groupValues[2].trim()
+                val connector = arithmetic.groupValues[3].lowercase(Locale.ROOT)
+                val second = arithmetic.groupValues[4].trim()
+                when {
+                    verb in setOf("add", "sum") && connector in setOf("and", "to") -> "$first + $second"
+                    verb == "subtract" && connector == "from" -> "$second - $first"
+                    verb == "multiply" && connector in setOf("and", "by") -> "$first * $second"
+                    verb == "divide" && connector == "by" -> "$first / $second"
+                    else -> return null
+                }
             }
-        } else {
-            val match = Regex(
-                "^(?:calculate|compute|work out|solve|what is|what's|how much is)\\s+(.+?)[?.!]*$|^what does\\s+(.+?)\\s+equal[?.!]*$",
-                RegexOption.IGNORE_CASE
-            ).matchEntire(command) ?: return null
-            match.groupValues[1].ifBlank { match.groupValues[2] }.trim()
+            else -> {
+                val match = Regex(
+                    "^(?:calculate|compute|work out|solve|what is|what's|how much(?: is)?)\\s+(.+?)[?.!]*$|^what does\\s+(.+?)\\s+equal[?.!]*$",
+                    RegexOption.IGNORE_CASE
+                ).matchEntire(command)
+                if (match != null) {
+                    match.groupValues[1].ifBlank { match.groupValues[2] }.trim()
+                } else if (isBareMathExpression(command)) {
+                    command
+                } else {
+                    return null
+                }
+            }
         }
         if (expression.isBlank()) return null
         expression = expression.replace("×", "*").replace("÷", "/")
@@ -438,7 +459,7 @@ object RuleEngine {
             .replace(Regex("\\b(?:minus|subtract)\\b", RegexOption.IGNORE_CASE), "-")
             .replace(Regex("(?i)\\b(?:times|multiplied by)\\b"), "*")
             .replace(Regex("\\b(?:divided by|over)\\b", RegexOption.IGNORE_CASE), "/")
-            .replace(Regex("(?<=\\d)\\s*[xX]\\s*(?=[\\d(]"), "*")
+            .replace(Regex("(?<=\\d)\\s*[xX]\\s*(?=[\\d(])"), "*")
         val tensAndOnes = Regex("(?i)\\b(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)\\s+(one|two|three|four|five|six|seven|eight|nine)\\b")
         expression = tensAndOnes.replace(expression) { result ->
             ((numberWords[result.groupValues[1].lowercase(Locale.ROOT)] ?: 0) + (numberWords[result.groupValues[2].lowercase(Locale.ROOT)] ?: 0)).toString()
@@ -453,6 +474,10 @@ object RuleEngine {
             null
         }
     }
+
+    private fun isBareMathExpression(command: String): Boolean =
+        Regex("^[\\d\\s().+\\-*/%xX×÷]+$").matches(command) &&
+            Regex("[+*/%xX×÷]|\\d\\s*-").containsMatchIn(command)
 
     private fun checkedPlan(tool: String, args: Map<String, Any?>): List<PlanStep>? =
         checkedStep(tool, args)?.let(::listOf)

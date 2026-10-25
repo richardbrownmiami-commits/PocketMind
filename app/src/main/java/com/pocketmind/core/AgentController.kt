@@ -341,7 +341,11 @@ class AgentController(context: Context) : Closeable {
         else results.joinToString("\n") { result ->
             when (result.status) {
                 ActionStatus.VERIFIED, ActionStatus.HANDED_OFF -> result.message
-                ActionStatus.FAILED -> "I couldn't complete that action."
+                ActionStatus.FAILED -> if (result.message.contains("SQL action log could not be saved")) {
+                    "I couldn't complete that action. ${result.message}"
+                } else {
+                    "I couldn't complete that action."
+                }
             }
         }
 
