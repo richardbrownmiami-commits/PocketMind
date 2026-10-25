@@ -243,6 +243,7 @@ class AgentController(context: Context) : Closeable {
         val userId = messages.append("user", raw)
         indexRecall(userId, raw)
 
+        val actionRequest = ActionRequestPolicy.looksLikeAction(raw)
         val plan = createActionPlan(resolved, raw)
         if (plan != null) {
             val execution = executeOrHold(plan)
@@ -251,6 +252,12 @@ class AgentController(context: Context) : Closeable {
             indexRecall(assistantId, answer)
             updateTopic(raw, execution.results)
             return@withContext AgentReply(answer, execution.results, execution.confirmationId)
+        }
+        val noPlanReply = ActionRequestPolicy.noPlanReply(actionRequest, plan)
+        if (noPlanReply != null) {
+            val assistantId = messages.append("assistant", noPlanReply)
+            indexRecall(assistantId, noPlanReply)
+            return@withContext AgentReply(noPlanReply)
         }
 
         val currentRecall = if (preferences.getBoolean("recall_enabled", true)) recall.recall(resolved, userId).take(2).map { it.text }.let { capChars(it, 700) } else emptyList()
@@ -380,7 +387,7 @@ class AgentController(context: Context) : Closeable {
         if (ModelStore(app).selected() == null || loadedPath == null) {
             return SyntheticChatTurnResult("No model is loaded. This synthetic chat turn was not run.", null, false)
         }
-        val actionRequest = looksLikeAction(raw)
+        val actionRequest = ActionRequestPolicy.looksLikeAction(raw)
         val plan = createActionPlan(raw)
         if (plan != null) {
             val reply = "Synthetic route: ${plan.joinToString { it.tool }}. No action was executed or saved."
@@ -501,21 +508,13 @@ class AgentController(context: Context) : Closeable {
 
     private fun createActionPlan(question: String, actionIntentText: String = question): List<PlanStep>? {
         val relevantTools = registry.relevant(question, 5)
-        if (relevantTools.isEmpty() || !looksLikeAction(actionIntentText)) return null
+        if (relevantTools.isEmpty() || !ActionRequestPolicy.looksLikeAction(actionIntentText)) return null
         val planText = generateOrNull(plannerPrompt(question, relevantTools), 160, ACTION_GRAMMAR, {}) ?: return null
         val parsed = try { PlannerJson.parse(planText) } catch (_: Exception) { return null }
         return parsed.takeIf {
             it.isNotEmpty() && validator.validatePlan(it) == null &&
                 it.all { step -> relevantTools.any { tool -> tool.id == step.tool } }
         }
-    }
-
-    private fun looksLikeAction(text: String): Boolean {
-        val clean = text.trim()
-        if (Regex("(?i)^(how (?:do|can) i|what does|why did|explain|tell me how)\\b").containsMatchIn(clean)) return false
-        val verb = "(?:set|start|turn on|turn off|open|launch|change|save|create|adjust|enable|disable|switch|raise|lower|increase|decrease|turn up|turn down|search for|find|check|show|list)"
-        return Regex("(?i)^(?:please\\s+)?$verb\\b").containsMatchIn(clean) ||
-            Regex("(?i)\\b(?:can you|could you|please)\\s+$verb\\b").containsMatchIn(clean)
     }
 
     private fun generateOrNull(prompt: String, maxTokens: Int, grammar: String?, sink: (String) -> Unit): String? {
