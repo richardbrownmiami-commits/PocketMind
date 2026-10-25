@@ -203,7 +203,7 @@ object RuleEngine {
     }
 
     private fun isBatteryStatusRequest(command: String): Boolean = Regex(
-            "^(?:how much battery (?:is )?(?:left|remaining|available)|how much (?:free )?(?:ram|storage)(?: (?:is )?(?:available|free|left)| remains)?|battery(?: level| status| percentage| percent| life| remaining)?|what(?:'s| is) (?:my )?(?:current )?battery(?: level| status| percentage)?|check (?:my )?(?:battery|device status|system status|ram|storage|storage space)|show (?:(?:me|my) )?(?:battery(?: status| percentage| percent| level| life)?|remaining battery|device status|system status|ram|storage|storage space)|tell me (?:my )?battery status|get (?:my )?battery status|(?:available|free) ram|free storage|(?:device|system) status|status of (?:my )?(?:device|phone|battery)|how much charge is left)$", RegexOption.IGNORE_CASE
+            "^(?:how much battery (?:is )?(?:left|remaining|available)|show me how much battery (?:is )?(?:left|remaining|available)|tell me how much battery (?:is )?(?:left|remaining|available)|how much (?:free )?(?:ram|storage)(?: (?:is )?(?:available|free|left)| remains)?|battery(?: level| status| percentage| percent| life| remaining)?|what(?:'s| is) (?:my )?(?:current )?battery(?: level| status| percentage)?|check (?:my )?(?:battery|device status|system status|ram|storage|storage space)|show (?:(?:me|my) )?(?:battery(?: status| percentage| percent| level| life)?|remaining battery|device status|system status|ram|storage|storage space)|tell me (?:my )?battery status|get (?:my )?battery status|(?:available|free) ram|free storage|(?:device|system) status|status of (?:my )?(?:device|phone|battery)|how much charge is left)$", RegexOption.IGNORE_CASE
     ).matches(command)
 
     private fun alarmPlan(clean: String): PlanStep? {
@@ -248,7 +248,7 @@ object RuleEngine {
 
     private fun timerPlan(command: String): PlanStep? {
         val match = Regex(
-            "^(?:(?:set|start|run)\\s+(?:a\\s+)?timer(?:\\s+(?:for|of|in|after))?|(?:a\\s+)?timer\\s+(?:for|of|in)?|start\\s+(?:a\\s+)?countdown(?:\\s+(?:for|in))?)\\s*[:,-]?\\s*(.+)$|^(?:set|start|run)\\s+(?:a\\s+)?(.+?)\\s+timer$",
+            "^(?:(?:set|start|run)\\s+(?:(?:a|the|my)\\s+)?timer(?:\\s+(?:for|of|in|after))?|(?:(?:a|the|my)\\s+)?timer\\s+(?:for|of|in)?|start\\s+(?:a\\s+)?countdown(?:\\s+(?:for|in))?)\\s*[:,-]?\\s*(.+)$|^(?:set|start|run)\\s+(?:(?:a|the|my)\\s+)?(.+?)\\s+timer$",
             RegexOption.IGNORE_CASE
         ).matchEntire(command) ?: return null
         val duration = (match.groupValues[1].ifBlank { match.groupValues[2] }).trim()
@@ -308,10 +308,10 @@ object RuleEngine {
     private fun brightnessPlan(command: String): PlanStep? {
         val amountPattern = "(?:maximum|the maximum|max|minimum|the minimum|min|full|half|a quarter|quarter|three quarters|\\d+(?:\\.\\d+)?\\s*(?:%|percent)?(?:\\s+out\\s+of\\s+255)?|\\d+(?:\\.\\d+)?\\s+on\\s+(?:a\\s+)?(?:0\\s*[-–]\\s*255|255)\\s+scale)"
         val match = Regex(
-            "^(?:(?:set|change|adjust|put|dim|brighten|increase|decrease|raise|lower)\\s+(?:the\\s+)?(?:(?:screen|display)\\s+)?brightness(?:\\s+(?:to|at|level))?\\s+($amountPattern)|(?:screen|display)\\s+brightness\\s+(?:(?:to|at|level)\\s+)?($amountPattern)|brightness\\s+(?:(?:to|at|level)\\s+)?($amountPattern))$",
+            "^(?:(?:set|change|adjust|put|dim|brighten|increase|decrease|raise|lower)\\s+(?:the\\s+)?(?:(?:screen|display)\\s+)?brightness(?:\\s+(?:to|at|level))?\\s+($amountPattern)|(?:screen|display)\\s+brightness\\s+(?:(?:to|at|level)\\s+)?($amountPattern)|brightness\\s+(?:(?:to|at|level)\\s+)?($amountPattern)|(?:set|change|adjust|put|dim|brighten)\\s+(?:the\\s+)?(?:screen|display)(?:\\s+brightness)?(?:\\s+(?:to|at))?\\s+($amountPattern))$",
             RegexOption.IGNORE_CASE
         ).matchEntire(command) ?: return null
-        val amount = (1..3).map { match.groupValues[it] }.firstOrNull { it.isNotBlank() }?.trim() ?: return null
+        val amount = (1..4).map { match.groupValues[it] }.firstOrNull { it.isNotBlank() }?.trim() ?: return null
         val normalized = amount.lowercase(Locale.ROOT)
         val level = when {
             normalized == "maximum" || normalized == "the maximum" || normalized == "max" -> 255
@@ -389,18 +389,18 @@ object RuleEngine {
             Regex("\\b(?:wi-?fi|wireless)\\b", RegexOption.IGNORE_CASE).containsMatchIn(command) -> "wifi.settings"
             Regex("\\bbluetooth\\b", RegexOption.IGNORE_CASE).containsMatchIn(command) -> "bluetooth.settings"
             Regex("\\b(?:airplane(?:\\s+mode)?|flight\\s+mode)\\b", RegexOption.IGNORE_CASE).containsMatchIn(command) -> "airplane.settings"
-            Regex("\\blocation(?:\\s+services?)?\\b", RegexOption.IGNORE_CASE).containsMatchIn(command) -> "location.settings"
+            Regex("\\b(?:location(?:\\s+services?)?|gps)\\b", RegexOption.IGNORE_CASE).containsMatchIn(command) -> "location.settings"
             else -> return null
         }
         val explicitAction = Regex(
             "^(?:(?:open|show|display|launch|bring up|pull up|go to|take me to)\\b|(?:turn|switch|toggle|set|enable|disable|activate|deactivate|connect|disconnect)\\b)",
             RegexOption.IGNORE_CASE
         ).containsMatchIn(command) || Regex(
-            "^(?:wi-?fi|wireless|bluetooth|airplane(?:\\s+mode)?|flight\\s+mode|location(?:\\s+services?))\\s+(?:on|off|settings?|enabled|disabled)$",
+            "^(?:wi-?fi|wireless|bluetooth|airplane(?:\\s+mode)?|flight\\s+mode|location(?:\\s+services?)?|gps)\\s+(?:on|off|settings?|enabled|disabled)$",
             RegexOption.IGNORE_CASE
         ).matches(command)
         if (!explicitAction) return null
-        return checkedPlan(target, emptyMap())
+        return checkedStep(target, emptyMap())
     }
 
     private fun appOpenPlan(command: String): PlanStep? {
@@ -412,11 +412,26 @@ object RuleEngine {
     }
 
     private fun mathPlan(command: String): PlanStep? {
-        val match = Regex(
-            "^(?:calculate|compute|work out|solve|what is|what's|how much is)\\s+(.+?)[?.!]*$|^what does\\s+(.+?)\\s+equal[?.!]*$",
-            RegexOption.IGNORE_CASE
-        ).matchEntire(command) ?: return null
-        var expression = match.groupValues[1].ifBlank { match.groupValues[2] }.trim()
+        val arithmetic = Regex("^(add|sum|subtract|multiply|divide)\\s+(.+?)\\s+(and|to|from|by)\\s+(.+?)[?.!]*$", RegexOption.IGNORE_CASE).matchEntire(command)
+        var expression = if (arithmetic != null) {
+            val verb = arithmetic.groupValues[1].lowercase(Locale.ROOT)
+            val first = arithmetic.groupValues[2].trim()
+            val connector = arithmetic.groupValues[3].lowercase(Locale.ROOT)
+            val second = arithmetic.groupValues[4].trim()
+            when {
+                verb in setOf("add", "sum") && connector in setOf("and", "to") -> "$first + $second"
+                verb == "subtract" && connector == "from" -> "$second - $first"
+                verb == "multiply" && connector in setOf("and", "by") -> "$first * $second"
+                verb == "divide" && connector == "by" -> "$first / $second"
+                else -> return null
+            }
+        } else {
+            val match = Regex(
+                "^(?:calculate|compute|work out|solve|what is|what's|how much is)\\s+(.+?)[?.!]*$|^what does\\s+(.+?)\\s+equal[?.!]*$",
+                RegexOption.IGNORE_CASE
+            ).matchEntire(command) ?: return null
+            match.groupValues[1].ifBlank { match.groupValues[2] }.trim()
+        }
         if (expression.isBlank()) return null
         expression = expression.replace("×", "*").replace("÷", "/")
             .replace(Regex("\\b(?:plus|added to)\\b", RegexOption.IGNORE_CASE), "+")
@@ -456,13 +471,18 @@ object RuleEngine {
         ).containsMatchIn(clean)
     }
 
-    private fun isHowToQuestion(text: String): Boolean = Regex(
-        "^\\s*(?:how (?:do|can|would) i|what does|what if|why did|why should(?:n't| not)|should i|can i|could i|is it possible|explain|tell me how|show me how)\\b",
-        RegexOption.IGNORE_CASE
-    ).containsMatchIn(text) || Regex(
-        "^\\s*(?:tell|show)\\s+me\\s+how\\b",
-        RegexOption.IGNORE_CASE
-    ).containsMatchIn(text)
+    private fun isHowToQuestion(text: String): Boolean {
+        if (Regex("^\\s*(?:show|tell) me how much battery\\b", RegexOption.IGNORE_CASE).containsMatchIn(text)) return false
+        val arithmeticQuestion = Regex("^\\s*what does\\s+(.+?)\\s+equal[?.!]*$", RegexOption.IGNORE_CASE).matchEntire(text)
+        if (arithmeticQuestion != null && Regex("\\d|\\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|twenty|thirty|forty|fifty|sixty)\\b", RegexOption.IGNORE_CASE).containsMatchIn(arithmeticQuestion.groupValues[1])) return false
+        return Regex(
+            "^\\s*(?:how (?:do|can|would) i|what does|what if|why did|why should(?:n't| not)|should i|can i|could i|is it possible|explain|tell me how|show me how)\\b",
+            RegexOption.IGNORE_CASE
+        ).containsMatchIn(text) || Regex(
+            "^\\s*(?:tell|show)\\s+me\\s+how\\b",
+            RegexOption.IGNORE_CASE
+        ).containsMatchIn(text)
+    }
 
     private fun stripPolitePrefix(text: String): String = text.replaceFirst(
         Regex("^(?:no,?\\s+(?:(?:actually|wait)\\s+)?|actually,?\\s+|please\\s+|(?:can|could|would|will) you\\s+(?:please\\s+)?|i want you to\\s+|i need you to\\s+|i'd like you to\\s+|i would like you to\\s+|i want to\\s+|i need to\\s+|i'd like to\\s+)", RegexOption.IGNORE_CASE),
