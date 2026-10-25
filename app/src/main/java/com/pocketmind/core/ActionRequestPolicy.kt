@@ -24,6 +24,27 @@ internal object ActionRequestPolicy {
         return clean.isNotEmpty() && historyRequestPatterns.any { it.matches(clean) }
     }
 
+    private val liveFreshnessPattern = Regex(
+        """\b(?:latest|newest|current(?:ly)?|right\s+now|now|today|tonight|tomorrow|this\s+(?:week|month|year|weekend)|next\s+(?:week|month|year|weekend|quarter)|recent(?:ly)?|trending|tranding|viral|upcoming|future|breaking|live|forecast|scheduled)\b""",
+        RegexOption.IGNORE_CASE
+    )
+    private val liveLookupStartPattern = Regex(
+        """^(?:(?:what|who|when|where|which|why|how|is|are|was|were|will|has|have|do|does|did|can|could)\b|(?:tell\s+me|show\s+me|find|search(?:\s+for)?|look\s+up|give\s+me|list|get|check|latest|newest|current|recent|upcoming|trending|tranding|future|forecast)\b)""",
+        RegexOption.IGNORE_CASE
+    )
+    private val selfDirectedChatPattern = Regex(
+        """^(?:how\s+are\s+you\b|are\s+you\s+(?:currently\s+)?(?:doing|feeling|there|available)\b|what\s+are\s+you\s+(?:doing|up\s+to)\b)""",
+        RegexOption.IGNORE_CASE
+    )
+
+    /** Live web access requires an explicit freshness-oriented lookup, never ambient chat. */
+    fun isLiveSearchRequest(text: String): Boolean {
+        val clean = text.trim().trimEnd('.', '?', '!').trim()
+        if (clean.isEmpty() || selfDirectedChatPattern.containsMatchIn(clean)) return false
+        val asksForInformation = liveLookupStartPattern.containsMatchIn(clean) || text.trim().endsWith('?')
+        return asksForInformation && liveFreshnessPattern.containsMatchIn(clean)
+    }
+
     fun looksLikeAction(text: String, ruleMatched: Boolean = false): Boolean {
         if (ruleMatched) return false
         val clean = text.trim()

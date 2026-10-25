@@ -19,7 +19,7 @@ You talk or type. A **fast rule layer** handles simple commands instantly (time,
 | API level | 30 for everything: `minSdk = 30`, `targetSdk = 30`, `compileSdk = 30` |
 | NDK platform | `-DANDROID_PLATFORM=android-30` |
 | RAM assumption | 2–3 GB total, often under 1 GB free |
-| Network | none required (no INTERNET permission in the first versions) |
+| Network | offline by default; INTERNET is used only by an explicit model-planned `web.search` request to DuckDuckGo over HTTPS; result pages are not opened |
 
 Notes:
 - `minSdk = 30` means no legacy support code and `java.time` works without desugaring.
