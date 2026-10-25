@@ -72,12 +72,12 @@ class ToolRuntime(
             val invalid = validator.validate(step)
             if (invalid != null) return@map finish(step, originalRequest, ActionStatus.FAILED, invalid, source)
             if (registry.get(step.tool) == null) return@map finish(step, originalRequest, ActionStatus.FAILED, "Unknown tool", source)
-            var result = perform(step)
+            var result = perform(step, originalRequest)
             var attempts = 1
             val maximumAttempts = ToolExecutionRetryPolicy.maximumAttempts(step)
             while (result.status == ActionStatus.FAILED && attempts < maximumAttempts) {
                 attempts++
-                result = perform(step)
+                result = perform(step, originalRequest)
             }
             finish(step, originalRequest, result.status, result.message, source)
         }
@@ -96,7 +96,7 @@ class ToolRuntime(
         }
     }
 
-    private fun perform(step: PlanStep): ActionResult {
+    private fun perform(step: PlanStep, originalRequest: String): ActionResult {
         val a = step.args
         return try {
             when (step.tool) {
@@ -119,7 +119,7 @@ class ToolRuntime(
                 }
                 "action.history" -> actionHistory(step)
                 "web.search" -> webSearch(step)
-                "alarm.set" -> setAlarm(step)
+                "alarm.set" -> setAlarm(step, originalRequest)
                 "timer.set" -> setTimer(step)
                 "flashlight" -> setTorch(step, a["enabled"] as Boolean)
                 "volume" -> setVolume(step)
@@ -196,16 +196,22 @@ class ToolRuntime(
         }
     }
 
-    private fun setAlarm(step: PlanStep): ActionResult {
+    private fun setAlarm(step: PlanStep, originalRequest: String): ActionResult {
         val hour = (step.args["hour"] as Number).toInt()
         val minute = (step.args["minute"] as Number).toInt()
         val displayTime = LocalTime.of(hour, minute).format(DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault()))
         val dayOffset = (step.args["daysFromToday"] as? Number)?.toInt()
         val label = (step.args["label"] as? String)?.take(80)
-        if (dayOffset == 1) {
+        val requestsTomorrow = Regex("\\btomorrow\\b", RegexOption.IGNORE_CASE).containsMatchIn(originalRequest)
+        val requestsUnsupportedDate = RuleEngine.hasUnsupportedAlarmDate(originalRequest)
+        if (dayOffset == 1 || requestsTomorrow || requestsUnsupportedDate) {
+            val dateMessage = when {
+                dayOffset == 1 || requestsTomorrow -> "I did not set an alarm for tomorrow; please set a one-time alarm for tomorrow directly in Clock."
+                else -> "I did not set an alarm for that calendar date; please set it directly in Clock."
+            }
             return failed(
                 step,
-                "Android Clock's alarm action cannot specify a one-time calendar date. I did not set an alarm for tomorrow; please set a one-time alarm for tomorrow directly in Clock."
+                "Android Clock's alarm action cannot specify a one-time calendar date. $dateMessage"
             )
         }
         if (dayOffset == 0 && !LocalDate.now().atTime(hour, minute).isAfter(LocalDateTime.now())) {
@@ -223,7 +229,11 @@ class ToolRuntime(
         val expectedMillis = target.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
         val observed = (app.getSystemService(Context.ALARM_SERVICE) as AlarmManager).nextAlarmClock?.triggerTime
         return if (observed != null && kotlin.math.abs(observed - expectedMillis) <= 90_000L) {
-            val day = if (dayOffset == 0) " today" else ""
+            val day = when {
+                dayOffset == 0 -> " today"
+                target.toLocalDate().isAfter(LocalDate.now()) -> " tomorrow"
+                else -> ""
+            }
             verified(step, "Alarm for $displayTime$day verified by the system.")
         } else {
             handoff(step, "The Clock app received the request for $displayTime; Android did not expose a matching next alarm for verification.")

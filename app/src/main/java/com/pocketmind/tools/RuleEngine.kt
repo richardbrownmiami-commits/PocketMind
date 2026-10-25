@@ -73,7 +73,17 @@ object RuleEngine {
         RegexOption.IGNORE_CASE
     )
     private val unsupportedAlarmDate = Regex(
-        "\\b(?:next\\s+(?:week|month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|on\\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|\\d{4}-\\d{1,2}-\\d{1,2})\\b",
+        listOf(
+            """\bday\s+after\s+tomorrow\b""",
+            """\b(?:next|this)\s+(?:day|week|month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b""",
+            """\b(?:on\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b""",
+            """\b(?:in|after)\s+(?:\d+(?:\.\d+)?|[a-z]+(?:[-\s]+[a-z]+)?)\s+(?:days?|weeks?|months?)\b""",
+            """\b(?:on\s+)?the\s+\d{1,2}(?:st|nd|rd|th)\b""",
+            """\b\d{4}-\d{1,2}-\d{1,2}\b""",
+            """\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b""",
+            """\b(?:on\s+)?(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?\b""",
+            """\b(?:on\s+)?\d{1,2}(?:st|nd|rd|th)?\s+(?:of\s+)?(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?(?:\s+\d{4})?\b"""
+        ).joinToString("|"),
         RegexOption.IGNORE_CASE
     )
     private val numberWords = mapOf(
@@ -84,8 +94,48 @@ object RuleEngine {
         "nineteen" to 19, "twenty" to 20, "thirty" to 30, "forty" to 40,
         "fifty" to 50, "sixty" to 60, "seventy" to 70, "eighty" to 80, "ninety" to 90
     )
+    private val relativeAlarmDurationPart = Regex(
+        """(?<![\p{L}\d])(\d+(?:\.\d+)?|a|an|[a-z]+(?:[- ][a-z]+)?)\s*(hours?|hrs?|h|minutes?|mins?|min|m)\b""",
+        RegexOption.IGNORE_CASE
+    )
 
     private data class ClockTime(val hour: Int, val minute: Int, val needsMeridiem: Boolean)
+
+    fun hasUnsupportedAlarmDate(text: String): Boolean = unsupportedAlarmDate.containsMatchIn(text)
+
+    private fun relativeAlarmTime(text: String): ClockTime? {
+        val matches = relativeAlarmDurationPart.findAll(text).toList()
+        if (matches.isEmpty()) return null
+        val remainder = relativeAlarmDurationPart.replace(text, " ")
+            .replace(Regex("(?i)\\b(?:in|after|for|and|from|now)\\b"), " ")
+            .replace(Regex("[\\s,]+"), "")
+        if (remainder.isNotEmpty()) return null
+        var totalMinutes = 0.0
+        for (part in matches) {
+            val amountText = part.groupValues[1].lowercase(Locale.ROOT).replace('-', ' ').trim()
+            val amount = when (amountText) {
+                "a", "an" -> 1.0
+                "forty five" -> 45.0
+                else -> amountText.toDoubleOrNull()
+                    ?: numberWords[amountText]?.toDouble()
+                    ?: amountText.split(Regex("\\s+")).takeIf { words -> words.size == 2 }?.let { words ->
+                        val tens = numberWords[words[0]]
+                        val ones = numberWords[words[1]]
+                        if (tens != null && tens in 20..90 && tens % 10 == 0 && ones != null && ones in 1..9) (tens + ones).toDouble() else null
+                    }
+                    ?: return null
+            }
+            val unit = part.groupValues[2].lowercase(Locale.ROOT)
+            totalMinutes += amount * if (unit.startsWith("h")) 60.0 else 1.0
+            if (!totalMinutes.isFinite() || totalMinutes > 1440.0) return null
+        }
+        val minutes = totalMinutes.roundToInt()
+        if (minutes !in 1..1440) return null
+        val target = java.time.ZonedDateTime.now().plusMinutes(minutes.toLong())
+        val clockTarget = if (target.second != 0 || target.nano != 0) target.plusMinutes(1) else target
+        val time = clockTarget.toLocalTime()
+        return ClockTime(time.hour, time.minute, false)
+    }
 
     fun alarmFollowUpPlan(text: String, label: String? = null): PlanStep? {
         val match = alarmTimeFollowUp.matchEntire(text) ?: return null
@@ -221,6 +271,13 @@ object RuleEngine {
         timeText = Regex("(?i)\\b(?:today|tomorrow)\\b").replace(timeText, " ")
         timeText = Regex("(?i)\\b(?:set|create|add|make|wake|me|up|alarm|clock|please|a|an|the|my)\\b").replace(timeText, " ")
         timeText = Regex("(?i)\\b(?:for|at|to|of)\\b").replace(timeText, " ")
+        val relativeTime = relativeAlarmTime(timeText)
+        if (relativeTime != null) {
+            val args = mutableMapOf<String, Any?>("hour" to relativeTime.hour, "minute" to relativeTime.minute)
+            dayOffset?.let { args["daysFromToday"] = it }
+            label?.takeIf { it.isNotBlank() }?.let { args["label"] = it }
+            return checkedStep("alarm.set", args)
+        }
         val found = clockToken.findAll(timeText).toList()
         if (found.size != 1) return null
         val timeMatch = found.single()
@@ -235,7 +292,7 @@ object RuleEngine {
     }
 
     private fun isAlarmCommand(text: String): Boolean = Regex(
-        "^(?:(?:set|create|add|make)\\s+(?:(?:me|an?|the|my)\\s+)*alarm\\b|wake\\s+me(?:\\s+up)?\\b|alarm\\s+(?:at|for)\\b)",
+        "^(?:(?:set|create|add|make)\\s+(?:(?:me|an?|the|my)\\s+)*alarm\\b|wake\\s+me(?:\\s+up)?\\b|alarm\\s+(?:at|for|in|after)\\b)",
         RegexOption.IGNORE_CASE
     ).containsMatchIn(text.trim())
 
