@@ -1,0 +1,86 @@
+<com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/model_card"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginBottom="@dimen/space_8"
+    android:clickable="true"
+    android:focusable="true"
+    app:cardBackgroundColor="@color/surface"
+    app:cardCornerRadius="@dimen/radius_card"
+    app:cardElevation="@dimen/elevation_card"
+    app:strokeColor="@color/divider"
+    app:strokeWidth="@dimen/stroke_width">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:padding="@dimen/space_12">
+
+        <View
+            android:id="@+id/model_dot"
+            android:layout_width="8dp"
+            android:layout_height="8dp"
+            android:background="@drawable/bg_model_dot" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="@dimen/space_12"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/model_name"
+                    style="@style/TextAppearance.PocketMind.Label"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:textColor="@color/on_background" />
+
+                <TextView
+                    android:id="@+id/model_selected_chip"
+                    style="@style/TextAppearance.PocketMind.Label"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="@dimen/space_8"
+                    android:background="@drawable/bg_selected_chip"
+                    android:paddingStart="@dimen/space_8"
+                    android:paddingTop="@dimen/space_4"
+                    android:paddingEnd="@dimen/space_8"
+                    android:paddingBottom="@dimen/space_4"
+                    android:text="@string/selected"
+                    android:textColor="@color/primary"
+                    android:visibility="gone" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/model_size"
+                style="@style/TextAppearance.PocketMind.Caption"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_4"
+                android:textColor="@color/muted" />
+        </LinearLayout>
+
+        <ImageButton
+            android:id="@+id/model_overflow"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/model_options"
+            android:padding="@dimen/space_12"
+            android:src="@drawable/ic_more_vert"
+            android:tint="@color/on_surface" />
+    </LinearLayout>
+</com.google.android.material.card.MaterialCardView>

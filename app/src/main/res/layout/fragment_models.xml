@@ -29,178 +29,101 @@
         app:layout_constraintTop_toBottomOf="@id/models_title" />
 
     <TextView
-        android:id="@+id/model_count"
-        style="@style/TextAppearance.PocketMind.Label"
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="@dimen/space_12"
-        android:text="@string/model_count"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/models_subtitle" />
-
-    <com.google.android.material.card.MaterialCardView
-        android:id="@+id/import_model_button"
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="@dimen/space_8"
-        android:clickable="true"
-        android:focusable="true"
-        android:foreground="?attr/selectableItemBackground"
-        app:cardBackgroundColor="@color/surface"
-        app:cardCornerRadius="@dimen/radius_card"
-        app:cardElevation="@dimen/elevation_card"
-        app:strokeColor="@color/primary_dim"
-        app:strokeWidth="@dimen/stroke_width"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/model_count">
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:padding="@dimen/space_12">
-
-            <ImageView
-                android:layout_width="32dp"
-                android:layout_height="32dp"
-                android:contentDescription="@null"
-                android:src="@drawable/ic_upload_file"
-                android:tint="@color/primary" />
-
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="@dimen/space_12"
-                android:layout_weight="1"
-                android:orientation="vertical">
-
-                <TextView
-                    style="@style/TextAppearance.PocketMind.Label"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/import_gguf" />
-
-                <TextView
-                    style="@style/TextAppearance.PocketMind.Caption"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="@dimen/space_4"
-                    android:text="@string/import_tile_subtitle" />
-            </LinearLayout>
-
-            <ProgressBar
-                android:id="@+id/import_progress"
-                style="?android:attr/progressBarStyleHorizontal"
-                android:layout_width="36dp"
-                android:layout_height="4dp"
-                android:indeterminate="true"
-                android:indeterminateTint="@color/primary"
-                android:visibility="gone" />
-        </LinearLayout>
-    </com.google.android.material.card.MaterialCardView>
-
-    <TextView
         android:id="@+id/models_message"
         style="@style/TextAppearance.PocketMind.Caption"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:layout_marginTop="@dimen/space_4"
+        android:layout_marginTop="@dimen/space_8"
         android:text=""
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/import_model_button" />
+        app:layout_constraintTop_toBottomOf="@id/models_subtitle" />
 
-    <androidx.core.widget.NestedScrollView
-        android:id="@+id/model_scroll"
+    <FrameLayout
+        android:id="@+id/model_content"
         android:layout_width="0dp"
         android:layout_height="0dp"
         android:layout_marginTop="@dimen/space_8"
-        android:fillViewport="true"
-        android:overScrollMode="never"
-        app:layout_constraintBottom_toTopOf="@id/models_status"
+        android:layout_marginBottom="@dimen/space_12"
+        app:layout_constraintBottom_toTopOf="@id/model_actions"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/models_message">
 
-        <FrameLayout
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/model_list"
             android:layout_width="match_parent"
-            android:layout_height="match_parent">
+            android:layout_height="match_parent"
+            android:clipToPadding="false"
+            android:overScrollMode="never"
+            android:paddingBottom="@dimen/space_8" />
 
-            <LinearLayout
-                android:id="@+id/empty_model_state"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:gravity="center"
-                android:orientation="vertical"
-                android:padding="@dimen/space_24"
-                android:visibility="gone">
-
-                <TextView
-                    style="@style/TextAppearance.PocketMind.Body"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:gravity="center"
-                    android:text="@string/models_empty"
-                    android:textColor="@color/muted" />
-
-                <ProgressBar
-                    style="?android:attr/progressBarStyleHorizontal"
-                    android:layout_width="36dp"
-                    android:layout_height="4dp"
-                    android:layout_marginTop="@dimen/space_12"
-                    android:indeterminate="true"
-                    android:indeterminateTint="@color/primary" />
-            </LinearLayout>
-
-            <LinearLayout
-                android:id="@+id/model_list"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:paddingBottom="@dimen/space_8" />
-        </FrameLayout>
-    </androidx.core.widget.NestedScrollView>
-
-    <TextView
-        android:id="@+id/models_status"
-        style="@style/TextAppearance.PocketMind.Mono"
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:layout_marginBottom="@dimen/space_8"
-        android:maxLines="2"
-        android:text="@string/no_model_loaded"
-        app:layout_constraintBottom_toTopOf="@id/model_actions"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent" />
+        <TextView
+            android:id="@+id/empty_model_state"
+            style="@style/TextAppearance.PocketMind.Body"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:padding="@dimen/space_24"
+            android:text="@string/models_empty"
+            android:textColor="@color/muted"
+            android:visibility="gone" />
+    </FrameLayout>
 
     <LinearLayout
         android:id="@+id/model_actions"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
+        android:orientation="vertical"
         android:paddingBottom="@dimen/space_8"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent">
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/load_model_button"
-            style="@style/Widget.PocketMind.Button"
-            android:layout_width="0dp"
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginEnd="@dimen/space_8"
-            android:layout_weight="1"
-            android:text="@string/load_model" />
+            android:orientation="horizontal">
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/unload_model_button"
-            style="@style/Widget.PocketMind.Button.Outlined"
-            android:layout_width="0dp"
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/import_model_button"
+                style="@style/Widget.PocketMind.Button.Outlined"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="@dimen/space_8"
+                android:layout_weight="1"
+                android:text="@string/import_gguf"
+                app:icon="@drawable/ic_upload_file"
+                app:iconGravity="textStart"
+                app:iconTint="@color/primary" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/load_model_button"
+                style="@style/Widget.PocketMind.Button"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/load_model" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/models_status"
+            style="@style/TextAppearance.PocketMind.Caption"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="@string/unload_model" />
+            android:layout_marginTop="@dimen/space_8"
+            android:text="@string/no_model_loaded"
+            android:textColor="@color/muted" />
+
+        <com.google.android.material.progressindicator.LinearProgressIndicator
+            android:id="@+id/import_progress"
+            android:layout_width="match_parent"
+            android:layout_height="4dp"
+            android:layout_marginTop="@dimen/space_8"
+            android:indeterminate="true"
+            android:visibility="gone"
+            app:indicatorColor="@color/primary"
+            app:trackColor="@color/surface_variant"
+            app:trackThickness="4dp" />
     </LinearLayout>
 </androidx.constraintlayout.widget.ConstraintLayout>

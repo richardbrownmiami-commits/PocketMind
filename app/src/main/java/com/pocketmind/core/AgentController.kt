@@ -313,6 +313,7 @@ class AgentController(context: Context) : Closeable {
     }
 
     suspend fun unload(): String = withContext(dispatcher) { unloadInternal(); "Model unloaded." }
+    fun isModelLoaded(path: String): Boolean = loadedPath == path
     fun stop() { try { engine.cancel() } catch (_: Throwable) { } }
     fun status(): String = if (loadedPath == null) "No model loaded" else
         "Model loaded · context $contextSize · in $lastPromptTokens · out $lastOutputTokens · ${String.format(Locale.US, "%.1f", lastGenerationMs / 1000.0)}s"

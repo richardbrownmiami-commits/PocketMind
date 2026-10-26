@@ -24,6 +24,20 @@ class ModelStore(context: Context) {
         prefs.edit().putString("selected", file.absolutePath).apply()
     }
 
+    fun delete(file: File): Boolean {
+        val target = file.canonicalFile
+        require(target.parentFile == directory.canonicalFile && target.extension.equals("gguf", true))
+        if (!target.isFile) return false
+        val deleted = target.delete()
+        if (deleted) {
+            val selectedPath = prefs.getString("selected", null)
+            if (selectedPath != null && File(selectedPath).canonicalFile == target) {
+                prefs.edit().remove("selected").apply()
+            }
+        }
+        return deleted
+    }
+
     @Throws(Exception::class)
     fun import(uri: Uri): File {
         val resolver = app.contentResolver
