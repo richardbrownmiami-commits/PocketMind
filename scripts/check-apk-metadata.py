@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify app identity and search-only network contract embedded in a built APK."""
+"""Verify app identity and strict offline contract embedded in a built APK."""
 import argparse
 import os
 import re
@@ -37,12 +37,12 @@ def main() -> None:
         raise SystemExit("APK targetSdkVersion must be 30")
 
     permissions = subprocess.check_output([str(aapt), "dump", "permissions", str(args.apk)], text=True)
-    if "android.permission.INTERNET" not in permissions:
-        raise SystemExit("APK must include android.permission.INTERNET for the explicit web.search tool")
+    if "android.permission.INTERNET" in permissions:
+        raise SystemExit("Offline contract violated: APK must not include android.permission.INTERNET")
     if "android.permission.CHANGE_NETWORK_STATE" in permissions or "android.permission.ACCESS_NETWORK_STATE" in permissions:
-        raise SystemExit("APK requests an unnecessary general network-state permission")
+        raise SystemExit("Offline contract violated: APK requests a network-state permission")
 
-    print(f"APK manifest verified: {actual_package} {name} ({code}), min/target API 30, INTERNET permission for web.search")
+    print(f"APK manifest verified: {actual_package} {name} ({code}), min/target API 30, no Internet permission")
 
 
 if __name__ == "__main__":
