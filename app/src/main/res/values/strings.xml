@@ -1,3 +1,35 @@
 <resources>
     <string name="app_name">PocketMind</string>
+    <string name="nav_chat">Chat</string>
+    <string name="nav_models">Models</string>
+    <string name="nav_memory">Memory</string>
+    <string name="menu_about">About</string>
+    <string name="menu_clear_memory">Clear memory</string>
+    <string name="about_title">About PocketMind</string>
+    <string name="about_message">PocketMind is a private assistant that runs compatible language models on this device. Imported models and saved memory are stored in the app.</string>
+    <string name="chat_hint">Ask or command…</string>
+    <string name="chat_send">Send</string>
+    <string name="chat_stop">Stop</string>
+    <string name="no_model_loaded">No model loaded</string>
+    <string name="models_title">On-device Models</string>
+    <string name="models_subtitle">GGUF · Q4/Q5 · up to 1.2 GB</string>
+    <string name="models_empty">No GGUF models yet. Import a small Q4/Q5 model (up to 1.2 GB).</string>
+    <string name="import_gguf">Import GGUF</string>
+    <string name="load_model">Load model</string>
+    <string name="unload_model">Unload model</string>
+    <string name="memory_title">Memory</string>
+    <string name="remember_facts">Remember facts from conversation</string>
+    <string name="recall_conversations">Recall past conversations</string>
+    <string name="saved_facts">Saved facts</string>
+    <string name="recent_actions">Recent actions</string>
+    <string name="saved_notes">Saved notes</string>
+    <string name="clear_memory">Clear memory</string>
+    <string name="no_saved_facts">No saved facts yet. Tell me your name or preferences to get started.</string>
+    <string name="no_recorded_actions">No recorded actions.</string>
+    <string name="no_saved_notes">No saved notes. Notes are kept when memory is cleared.</string>
+    <string name="clear_memory_title">Clear saved memory?</string>
+    <string name="clear_memory_warning">This deletes saved messages, recall snippets, summaries, topics, auto-created facts, and the action log. Imported models and notes are kept.</string>
+    <string name="cancel">Cancel</string>
+    <string name="clear">Clear</string>
+    <string name="delete">Delete</string>
 </resources>

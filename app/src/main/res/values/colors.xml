@@ -3,6 +3,7 @@
     <color name="surface">#161D19</color>
     <color name="surface_variant">#1F2B24</color>
     <color name="primary">#4CAF82</color>
+    <color name="primary_indicator">#334CAF82</color>
     <color name="primary_dim">#2E6B4F</color>
     <color name="on_primary">#FFFFFF</color>
     <color name="secondary">#C9A84C</color>

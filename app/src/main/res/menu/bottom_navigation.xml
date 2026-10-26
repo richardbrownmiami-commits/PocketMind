@@ -1,0 +1,15 @@
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/nav_chat"
+        android:checked="true"
+        android:icon="@drawable/ic_chat_bubble_state"
+        android:title="@string/nav_chat" />
+    <item
+        android:id="@+id/nav_models"
+        android:icon="@drawable/ic_storage"
+        android:title="@string/nav_models" />
+    <item
+        android:id="@+id/nav_memory"
+        android:icon="@drawable/ic_auto_awesome"
+        android:title="@string/nav_memory" />
+</menu>

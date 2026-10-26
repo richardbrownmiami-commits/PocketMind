@@ -21,6 +21,10 @@
         <item name="android:windowLightStatusBar">false</item>
     </style>
 
+    <style name="Widget.PocketMind.BottomNavigation.ActiveIndicator" parent="Widget.Material3.BottomNavigationView.ActiveIndicator">
+        <item name="android:color">@color/primary_indicator</item>
+    </style>
+
     <style name="Widget.PocketMind.Button" parent="Widget.MaterialComponents.Button">
         <item name="cornerRadius">@dimen/radius_button</item>
         <item name="android:minHeight">48dp</item>

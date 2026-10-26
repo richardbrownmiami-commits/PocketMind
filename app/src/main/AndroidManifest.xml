@@ -30,8 +30,6 @@
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="false"
         android:supportsRtl="true">
-        <activity android:name=".ui.MemoryActivity" android:exported="false" />
-        <activity android:name=".ui.ModelsActivity" android:exported="false" />
         <receiver android:name=".tools.ScheduledAlarmReceiver" android:exported="false" />
         <receiver android:name=".tools.ScheduledAlarmBootReceiver" android:exported="false">
             <intent-filter>
