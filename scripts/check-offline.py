@@ -26,4 +26,16 @@ runtime = (root / "java/com/pocketmind/tools/ToolRuntime.kt").read_text(encoding
 if "LiveWebSearch" in runtime or '"web.search"' in runtime:
     raise SystemExit("Offline contract violated: network search remains in the tool runtime")
 
-print("OK: PocketMind has no Internet permission or network transport")
+controller = (root / "java/com/pocketmind/core/AgentController.kt").read_text(encoding="utf-8")
+required_agent_guards = (
+    "private const val MAX_AGENT_STEPS = 4",
+    "executeOfflineAgentPlan",
+    "if (result.status != ActionStatus.VERIFIED) break",
+    "executed.any { stepSignature(it) == stepSignature(step) }",
+    "Live web search is disabled in strict offline mode",
+)
+for guard in required_agent_guards:
+    if guard not in controller:
+        raise SystemExit(f"Offline agent contract violated: missing guard {guard!r}")
+
+print("OK: no network transport; offline agent is bounded, verified, and duplicate-safe")
