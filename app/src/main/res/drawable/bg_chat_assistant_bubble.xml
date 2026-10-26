@@ -1,0 +1,8 @@
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/bot_bubble" />
+    <corners
+        android:topLeftRadius="@dimen/radius_bubble"
+        android:topRightRadius="@dimen/radius_bubble"
+        android:bottomLeftRadius="@dimen/radius_bubble_corner"
+        android:bottomRightRadius="@dimen/radius_bubble" />
+</shape>

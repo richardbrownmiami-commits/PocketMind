@@ -1,0 +1,50 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/chat_row"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:paddingTop="@dimen/space_4"
+    android:paddingBottom="@dimen/space_4">
+
+    <LinearLayout
+        android:id="@+id/chat_bubble"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:background="@drawable/bg_chat_assistant_bubble"
+        android:orientation="vertical"
+        android:padding="@dimen/space_12">
+
+        <TextView
+            android:id="@+id/assistant_badge"
+            style="@style/TextAppearance.PocketMind.Badge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="@dimen/space_4"
+            android:text="PM"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/message_text"
+            style="@style/TextAppearance.PocketMind.Body"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:breakStrategy="high_quality" />
+
+        <LinearLayout
+            android:id="@+id/action_cards"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_8"
+            android:orientation="vertical"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/message_timestamp"
+            style="@style/TextAppearance.PocketMind.Caption"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="end"
+            android:layout_marginTop="@dimen/space_4"
+            android:visibility="gone" />
+    </LinearLayout>
+</LinearLayout>

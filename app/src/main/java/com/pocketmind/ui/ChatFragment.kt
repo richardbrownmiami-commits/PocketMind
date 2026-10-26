@@ -92,7 +92,7 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
         viewScope?.launch {
             val history = withContext(Dispatchers.IO) {
                 val db = AppDatabase(context)
-                try { MessageStore(db).recent(60).map { ChatAdapter.Line(it.role, it.content) } }
+                try { MessageStore(db).recent(60).map { ChatAdapter.Line(it.role, it.content, it.time) } }
                 finally { db.close() }
             }
             val activeViews = views ?: return@launch
@@ -109,7 +109,7 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
         if (text.isEmpty() || !activeViews.send.isEnabled || generationActive) return
         activeViews.input.setText("")
         adapter?.add("user", text)
-        val answerRow = adapter?.add("assistant", "") ?: return
+        val answerRow = adapter?.add("assistant", "", thinking = true) ?: return
         scrollToBottom()
         generationActive = true
         updateSendButton(true)
@@ -135,7 +135,7 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
                         scrollToBottom()
                     }
                 }
-                adapter?.update(answerRow, reply.text)
+                adapter?.update(answerRow, reply.text, reply.actions)
             } catch (e: Exception) {
                 adapter?.update(answerRow, "PocketMind could not finish: ${e.message ?: "unexpected error"}")
             } finally {
@@ -166,7 +166,7 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
         thinkingJob?.cancel()
         thinkingJob = viewScope?.launch {
             while (views != null) {
-                adapter?.update(answerRow, thinkingMessages[thinkingIndex % thinkingMessages.size])
+                adapter?.update(answerRow, thinkingMessages[thinkingIndex % thinkingMessages.size], thinking = true)
                 scrollToBottom()
                 thinkingIndex++
                 delay(1800)
