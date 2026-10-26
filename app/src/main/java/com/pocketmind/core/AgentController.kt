@@ -389,8 +389,10 @@ class AgentController(context: Context) : Closeable {
             append("Original request: ").append(question.take(180)).append('\n')
             append("Completed actions and observed outcomes:\n")
             results.forEachIndexed { index, result ->
-                append(index + 1).append(". ").append(result.tool).append(" [")
-                    .append(result.status.name).append("]: ").append(result.message.take(160)).append('\n')
+                append(index + 1).append(". ").append(result.tool)
+                    .append(" args=").append(result.args.entries.joinToString { "${it.key}=${it.value}" }.take(100))
+                    .append(" [").append(result.status.name).append("]: ")
+                    .append(result.message.take(160)).append('\n')
             }
             append("Available local tools:\n")
             tools.forEach { spec ->
@@ -514,7 +516,7 @@ class AgentController(context: Context) : Closeable {
         val relevantTools = if (historyIntent) {
             listOfNotNull(registry.get("action.history"))
         } else {
-            registry.relevant(question, 5)
+            registry.relevant(question, 3)
         }
         if (relevantTools.isEmpty() || !actionRequest) return null
         val planText = generateOrNull(plannerPrompt(question, relevantTools), 160, ACTION_GRAMMAR, {}) ?: return null
