@@ -52,13 +52,14 @@ class MainActivity : AppCompatActivity() {
     private var thinkingIndex = 0
     @Volatile private var activityDestroyed = false
 
-    private fun startThinking() {
+    private fun startThinking(answerRow: Int) {
         thinkingIndex = 0
         thinkingJob?.cancel()
         thinkingJob = uiScope.launch {
             while (true) {
                 if (activityDestroyed) break
-                status.text = thinkingMessages[thinkingIndex % thinkingMessages.size]
+                adapter.update(answerRow, thinkingMessages[thinkingIndex % thinkingMessages.size])
+                scrollToBottom()
                 thinkingIndex++
                 delay(1800)
             }
@@ -136,7 +137,6 @@ class MainActivity : AppCompatActivity() {
             isEnabled = false
             setOnClickListener {
                 controller.stop()
-                status.text = "Stopping generation…"
             }
         }
         root.addView(stop)
@@ -152,7 +152,7 @@ class MainActivity : AppCompatActivity() {
         scrollToBottom()
         send.isEnabled = false
         stop.isEnabled = true
-        startThinking()
+        startThinking(answerRow)
         try { ContextCompat.startForegroundService(this, Intent(this, GenerationService::class.java).setAction(GenerationService.ACTION_START)) }
         catch (_: Exception) { }
         val streamed = StringBuilder()

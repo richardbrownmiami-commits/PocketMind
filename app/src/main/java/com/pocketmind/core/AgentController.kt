@@ -25,8 +25,10 @@ import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
 import java.io.Closeable
+import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 data class AgentReply(
     val text: String,
@@ -121,6 +123,10 @@ class AgentController(context: Context) : Closeable {
     private val engine = LlamaEngine()
     @Volatile private var loadedPath: String? = null
     @Volatile var lastPromptTokens: Int = 0
+        private set
+    @Volatile var lastOutputTokens: Int = 0
+        private set
+    @Volatile var lastGenerationMs: Long = 0
         private set
     private var contextSize = 512
     private data class PendingClarification(val tool: String, val request: String, val label: String? = null)
@@ -308,7 +314,8 @@ class AgentController(context: Context) : Closeable {
 
     suspend fun unload(): String = withContext(dispatcher) { unloadInternal(); "Model unloaded." }
     fun stop() { try { engine.cancel() } catch (_: Throwable) { } }
-    fun status(): String = if (loadedPath == null) "No model loaded" else "Model loaded · context $contextSize · last prompt $lastPromptTokens tokens"
+    fun status(): String = if (loadedPath == null) "No model loaded" else
+        "Model loaded · context $contextSize · in $lastPromptTokens · out $lastOutputTokens · ${String.format(Locale.US, "%.1f", lastGenerationMs / 1000.0)}s"
 
     private data class ActionExecution(val results: List<ActionResult>)
 
@@ -446,7 +453,18 @@ class AgentController(context: Context) : Closeable {
         if (loadedPath == null) return null
         return try {
             try { lastPromptTokens = engine.countTokens(prompt) } catch (_: Throwable) { }
-            engine.generate(prompt, maxTokens, grammar, sink).trim().takeIf { it.isNotEmpty() }
+            lastOutputTokens = 0
+            val outputTokenCount = AtomicInteger(0)
+            val startedAt = System.currentTimeMillis()
+            try {
+                engine.generate(prompt, maxTokens, grammar) { piece ->
+                    outputTokenCount.incrementAndGet()
+                    sink(piece)
+                }.trim().takeIf { it.isNotEmpty() }
+            } finally {
+                lastOutputTokens = outputTokenCount.get()
+                lastGenerationMs = System.currentTimeMillis() - startedAt
+            }
         } catch (_: Throwable) {
             null
         }
