@@ -26,6 +26,8 @@ import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
 import java.io.Closeable
 import java.util.Locale
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -34,6 +36,9 @@ data class AgentReply(
     val text: String,
     val actions: List<ActionResult> = emptyList()
 )
+
+private fun currentDateTimeLine(): String =
+    "Current date and time: ${LocalDateTime.now().format(DateTimeFormatter.ofPattern("EEEE, MMMM d, yyyy h:mm a", Locale.getDefault()))}\n"
 
 /** Deterministic native-token budgeter. It never truncates or drops the current question. */
 object PromptBudget {
@@ -53,7 +58,9 @@ object PromptBudget {
         var facts = inputs.facts.toList()
         var turns = inputs.turns.toList()
         val dropped = mutableListOf<String>()
+        val dateTimeLine = currentDateTimeLine()
         fun render() = buildString {
+            append(dateTimeLine)
             append("You are PocketMind, a private offline assistant. Use only supplied context; if uncertain, say so.\n")
             if (facts.isNotEmpty()) append("Facts and topic: ").append(facts.joinToString("; ")).append('\n')
             if (summary != null) append("Conversation summary: ").append(summary).append('\n')
@@ -409,6 +416,7 @@ class AgentController(context: Context) : Closeable {
     }
 
     private fun plannerPrompt(question: String, tools: List<ToolSpec>, liveSearchRequest: Boolean = false) = buildString {
+        append(currentDateTimeLine())
         if (liveSearchRequest) {
             append("Return only JSON matching {\"steps\":[{\"tool\":string,\"args\":object}]}. The router confirmed an explicit current-information request. Call web.search exactly once; use the request as a concise query and set limit=2. Do not answer yet. Request: ")
                 .append(question.take(240)).append("\nJSON:")
@@ -456,12 +464,40 @@ class AgentController(context: Context) : Closeable {
             try { lastPromptTokens = engine.countTokens(prompt) } catch (_: Throwable) { }
             lastOutputTokens = 0
             val outputTokenCount = AtomicInteger(0)
+            val generated = StringBuilder()
+            var streamedLength = 0
+            var stoppedAt: Int? = null
             val startedAt = System.currentTimeMillis()
             try {
                 engine.generate(prompt, maxTokens, grammar) { piece ->
                     outputTokenCount.incrementAndGet()
-                    sink(piece)
-                }.trim().takeIf { it.isNotEmpty() }
+                    if (stoppedAt == null) {
+                        generated.append(piece)
+                        val text = generated.toString()
+                        val markerIndex = GENERATION_STOP_MARKERS
+                            .mapNotNull { marker -> text.indexOf(marker).takeIf { it >= 0 } }
+                            .minOrNull()
+                        if (markerIndex != null) {
+                            if (markerIndex > streamedLength) sink(text.substring(streamedLength, markerIndex))
+                            streamedLength = markerIndex
+                            stoppedAt = markerIndex
+                            engine.cancel()
+                        } else {
+                            val heldChars = GENERATION_STOP_MARKERS.maxOf { marker ->
+                                (minOf(marker.length - 1, text.length) downTo 1)
+                                    .firstOrNull { length -> text.regionMatches(text.length - length, marker, 0, length) } ?: 0
+                            }
+                            val safeEnd = text.length - heldChars
+                            if (safeEnd > streamedLength) {
+                                sink(text.substring(streamedLength, safeEnd))
+                                streamedLength = safeEnd
+                            }
+                        }
+                    }
+                }
+                val text = generated.toString()
+                if (stoppedAt == null && streamedLength < text.length) sink(text.substring(streamedLength))
+                text.substring(0, stoppedAt ?: text.length).trim().takeIf { it.isNotEmpty() }
             } finally {
                 lastOutputTokens = outputTokenCount.get()
                 lastGenerationMs = System.currentTimeMillis() - startedAt
@@ -512,6 +548,7 @@ class AgentController(context: Context) : Closeable {
         private const val DEFAULT_CONTEXT = 512
         private const val DEFAULT_THREADS = 2
         private const val ANSWER_TOKENS = 128
+        private val GENERATION_STOP_MARKERS = listOf("\nuser:", "\nUser:", "\nassistant:", "\nAssistant:", "\nHuman:")
         private val ACTION_GRAMMAR = """
             root ::= "{\"steps\":[" (step ("," step){0,7})? "]}"
             step ::= "{\"tool\":\"" tool "\",\"args\":" object "}"

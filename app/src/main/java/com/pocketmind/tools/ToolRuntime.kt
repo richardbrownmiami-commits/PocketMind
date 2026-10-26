@@ -223,7 +223,11 @@ class ToolRuntime(
             .putExtra(AlarmClock.EXTRA_SKIP_UI, true)
         label?.let { intent.putExtra(AlarmClock.EXTRA_MESSAGE, it) }
         if (intent.resolveActivity(app.packageManager) == null) return failed(step, "No Clock app can handle an alarm.")
-        app.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        try {
+            app.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (_: SecurityException) {
+            return failed(step, "Could not reach the Clock app. It may be blocked on this phone.")
+        }
         val target = LocalDate.now().plusDays((dayOffset ?: 0).toLong()).atTime(hour, minute)
             .let { if (dayOffset == null && !it.isAfter(LocalDateTime.now())) it.plusDays(1) else it }
         val expectedMillis = target.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
