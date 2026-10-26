@@ -6,7 +6,6 @@ import android.os.Bundle
 import android.text.format.DateFormat
 import android.view.LayoutInflater
 import android.view.View
-import android.view.ViewGroup
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -130,14 +129,10 @@ class MemoryFragment : Fragment(R.layout.fragment_memory) {
     private fun inflateCard(layoutId: Int): MaterialCardView =
         LayoutInflater.from(requireContext()).inflate(layoutId, views?.facts, false) as MaterialCardView
 
-    private fun emptyState(stringId: Int): TextView = TextView(requireContext()).apply {
-        setTextAppearance(R.style.TextAppearance_PocketMind_Caption)
-        setTextColor(ContextCompat.getColor(requireContext(), R.color.muted))
-        setText(stringId)
-        gravity = android.view.Gravity.CENTER
-        setPadding(0, resources.getDimensionPixelSize(R.dimen.space_12), 0, resources.getDimensionPixelSize(R.dimen.space_12))
-        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-    }
+    private fun emptyState(stringId: Int): TextView =
+        (LayoutInflater.from(requireContext()).inflate(R.layout.item_memory_empty, views?.facts, false) as TextView).apply {
+            setText(stringId)
+        }
 
     private fun deleteFact(key: String) {
         val context = requireContext().applicationContext
