@@ -46,6 +46,7 @@
     <string name="cancel">Cancel</string>
     <string name="clear">Clear</string>
     <string name="delete">Delete</string>
+    <string name="delete_fact">Delete fact</string>
     <string name="action_verified">Verified</string>
     <string name="action_handed_off">Handed off</string>
     <string name="action_failed">Failed</string>

@@ -1,9 +1,13 @@
 package com.pocketmind.ui
 
 import android.content.Context
+import android.content.res.ColorStateList
 import android.os.Bundle
+import android.text.format.DateFormat
+import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.content.ContextCompat
@@ -14,6 +18,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.pocketmind.R
 import com.pocketmind.memory.ActionLogStore
+import com.pocketmind.memory.ActionRecord
 import com.pocketmind.memory.AppDatabase
 import com.pocketmind.memory.Fact
 import com.pocketmind.memory.FactStore
@@ -25,6 +30,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.Date
 
 class MemoryFragment : Fragment(R.layout.fragment_memory) {
     private data class MemoryViews(
@@ -67,7 +73,7 @@ class MemoryFragment : Fragment(R.layout.fragment_memory) {
     }
 
     fun refresh() {
-        val activeViews = views ?: return
+        if (views == null) return
         val context = requireContext().applicationContext
         viewScope?.launch {
             val data = withContext(Dispatchers.IO) {
@@ -82,69 +88,55 @@ class MemoryFragment : Fragment(R.layout.fragment_memory) {
             currentViews.facts.removeAllViews()
             currentViews.actions.removeAllViews()
             currentViews.notes.removeAllViews()
-            if (data.first.isEmpty()) currentViews.facts.addView(emptyText(R.string.no_saved_facts))
+            if (data.first.isEmpty()) currentViews.facts.addView(emptyState(R.string.no_saved_facts))
             data.first.forEach { fact -> currentViews.facts.addView(factCard(fact)) }
-            if (data.second.isEmpty()) currentViews.actions.addView(emptyText(R.string.no_recorded_actions))
-            data.second.forEach { entry ->
-                currentViews.actions.addView(contentCard("${entry.tool} · ${entry.outcome}: ${entry.message}"))
-            }
-            if (data.third.isEmpty()) currentViews.notes.addView(emptyText(R.string.no_saved_notes))
-            data.third.forEach { note -> currentViews.notes.addView(contentCard(note.content)) }
+            if (data.second.isEmpty()) currentViews.actions.addView(emptyState(R.string.no_recorded_actions))
+            data.second.forEach { action -> currentViews.actions.addView(actionCard(action)) }
+            if (data.third.isEmpty()) currentViews.notes.addView(emptyState(R.string.no_saved_notes))
+            data.third.forEach { note -> currentViews.notes.addView(noteCard(note)) }
         }
     }
 
     private fun factCard(fact: Fact): MaterialCardView {
-        val context = requireContext()
-        val row = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = android.view.Gravity.CENTER_VERTICAL
-        }
-        val label = TextView(context).apply {
-            setTextAppearance(R.style.TextAppearance_PocketMind_Body)
-            text = "${fact.key}: ${fact.value}"
-        }
-        row.addView(label, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        row.addView(MaterialButton(context).apply {
-            text = getString(R.string.delete)
-            setOnClickListener { deleteFact(fact.key) }
-        })
-        return card(row)
+        val row = inflateCard(R.layout.item_memory_fact)
+        row.findViewById<TextView>(R.id.fact_key).text = fact.key
+        row.findViewById<TextView>(R.id.fact_value).text = fact.value
+        row.findViewById<ImageButton>(R.id.delete_fact_button).setOnClickListener { deleteFact(fact.key) }
+        return row
     }
 
-    private fun contentCard(text: String): MaterialCardView {
-        val label = TextView(requireContext()).apply {
-            setTextAppearance(R.style.TextAppearance_PocketMind_Body)
-            this.text = text
+    private fun actionCard(action: ActionRecord): MaterialCardView {
+        val row = inflateCard(R.layout.item_memory_action)
+        row.findViewById<TextView>(R.id.action_tool_chip).text = action.tool
+        row.findViewById<TextView>(R.id.action_message).text = action.message
+        row.findViewById<TextView>(R.id.action_timestamp).text = DateFormat.getTimeFormat(requireContext()).format(Date(action.created))
+        val dot = row.findViewById<View>(R.id.action_outcome_dot)
+        val color = when {
+            action.outcome.contains("HANDED_OFF", ignoreCase = true) || action.outcome.contains("HANDOFF", ignoreCase = true) -> R.color.secondary
+            action.outcome.contains("FAILED", ignoreCase = true) || action.outcome.contains("FAIL", ignoreCase = true) -> R.color.error
+            else -> R.color.primary
         }
-        return card(label)
+        dot.backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(requireContext(), color))
+        return row
     }
 
-    private fun emptyText(stringId: Int): TextView = TextView(requireContext()).apply {
+    private fun noteCard(note: NoteStore.Note): MaterialCardView {
+        val row = inflateCard(R.layout.item_memory_note)
+        row.findViewById<TextView>(R.id.note_message).text = note.content
+        row.findViewById<TextView>(R.id.note_timestamp).text = DateFormat.getTimeFormat(requireContext()).format(Date(note.created))
+        return row
+    }
+
+    private fun inflateCard(layoutId: Int): MaterialCardView =
+        LayoutInflater.from(requireContext()).inflate(layoutId, views?.facts, false) as MaterialCardView
+
+    private fun emptyState(stringId: Int): TextView = TextView(requireContext()).apply {
         setTextAppearance(R.style.TextAppearance_PocketMind_Caption)
         setTextColor(ContextCompat.getColor(requireContext(), R.color.muted))
         setText(stringId)
-        setPadding(0, resources.getDimensionPixelSize(R.dimen.space_8), 0, resources.getDimensionPixelSize(R.dimen.space_8))
-    }
-
-    private fun card(content: View): MaterialCardView {
-        val context = requireContext()
-        val card = MaterialCardView(context).apply {
-            radius = resources.getDimension(R.dimen.radius_action_card)
-            cardElevation = resources.getDimension(R.dimen.elevation_card)
-            setCardBackgroundColor(ContextCompat.getColor(context, R.color.surface_variant))
-            setContentPadding(
-                resources.getDimensionPixelSize(R.dimen.space_12),
-                resources.getDimensionPixelSize(R.dimen.space_8),
-                resources.getDimensionPixelSize(R.dimen.space_12),
-                resources.getDimensionPixelSize(R.dimen.space_8)
-            )
-            addView(content)
-        }
-        return card.apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                bottomMargin = resources.getDimensionPixelSize(R.dimen.space_8)
-            }
-        }
+        gravity = android.view.Gravity.CENTER
+        setPadding(0, resources.getDimensionPixelSize(R.dimen.space_12), 0, resources.getDimensionPixelSize(R.dimen.space_12))
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
     }
 
     private fun deleteFact(key: String) {
