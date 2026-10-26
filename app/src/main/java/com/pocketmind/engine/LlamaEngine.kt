@@ -1,5 +1,7 @@
 package com.pocketmind.engine
 
+import com.pocketmind.tools.LiveSearchPlannerContext
+
 /** One native instance; callers must serialize load/generate/unload on the model queue. */
 class LlamaEngine {
     companion object {
@@ -15,6 +17,16 @@ class LlamaEngine {
 
     fun generate(prompt: String, maxTokens: Int = 128, grammar: String? = null, onToken: (String) -> Unit = {}): String {
         require(maxTokens in 1..512) { "maxTokens must be between 1 and 512" }
+
+        // Explicit web-search requests are already unambiguous at the router boundary.
+        // Do not spend native inference tokens asking the small local model to emit a
+        // tool-call JSON envelope; return the validated deterministic plan immediately.
+        LiveSearchPlannerContext.takeQuery()?.let { query ->
+            val plan = "{\"steps\":[{\"tool\":\"web.search\",\"args\":{\"query\":\"${escapeJson(query)}\",\"limit\":2}}]}"
+            onToken(plan)
+            return plan
+        }
+
         return nativeGenerate(prompt, maxTokens, grammar, TokenSink(onToken))
     }
 
@@ -22,6 +34,19 @@ class LlamaEngine {
     fun cancel() = nativeCancel()
     fun unload() = nativeUnload()
     fun stats(): String = nativeStats()
+
+    private fun escapeJson(value: String): String = buildString(value.length) {
+        value.forEach { c ->
+            when (c) {
+                '\\' -> append("\\\\")
+                '"' -> append("\\\"")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                else -> append(c)
+            }
+        }
+    }
 
     private fun interface TokenSink { fun onToken(chunk: String) }
 

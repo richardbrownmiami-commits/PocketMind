@@ -1,5 +1,6 @@
 package com.pocketmind.core
 
+import com.pocketmind.tools.LiveSearchPlannerContext
 import com.pocketmind.tools.PlanStep
 
 /** Keeps failed action planning from silently falling through to ordinary chat. */
@@ -45,7 +46,10 @@ internal object ActionRequestPolicy {
     fun isLiveSearchRequest(text: String): Boolean {
         val clean = text.trim().trimEnd('.', '?', '!').trim()
         if (clean.isEmpty() || selfDirectedChatPattern.containsMatchIn(clean)) return false
-        if (explicitWebSearchPattern.matches(clean)) return true
+        if (explicitWebSearchPattern.matches(clean)) {
+            LiveSearchPlannerContext.setExplicitRequest(clean)
+            return true
+        }
         val asksForInformation = liveLookupStartPattern.containsMatchIn(clean) || text.trim().endsWith('?')
         return asksForInformation && liveFreshnessPattern.containsMatchIn(clean)
     }
