@@ -35,7 +35,7 @@ jobs:
         run: ./gradlew --no-daemon clean assembleDebug
       - name: Verify APK ABI
         run: python3 scripts/check-apk-abi.py app/build/outputs/apk/debug/app-debug.apk
-      - name: Verify search-only network source
+      - name: Verify strict offline and agent contract
         run: python3 scripts/check-offline.py
       - name: Verify APK identity and API contract
         run: python3 scripts/check-apk-metadata.py app/build/outputs/apk/debug/app-debug.apk --application-id com.pocketmind --version-code 2 --version-name 0.1.1
