@@ -351,7 +351,7 @@ class AgentController(context: Context) : Closeable {
         initialPlan: List<PlanStep>,
         originalRequest: String
     ): ActionExecution {
-        val allowedTools = registry.relevant(question, 5).filterNot { it.id == "web.search" }
+        val allowedTools = registry.relevant(question, 3).filterNot { it.id == "web.search" }
         val results = mutableListOf<ActionResult>()
         val executed = mutableListOf<PlanStep>()
         var nextStep: PlanStep? = initialPlan.firstOrNull()
@@ -394,14 +394,23 @@ class AgentController(context: Context) : Closeable {
             }
             append("Available local tools:\n")
             tools.forEach { spec ->
-                append(spec.id).append(": ").append(spec.description.take(110))
+                append(spec.id).append(": ").append(spec.description.take(70))
                 append("; args=").append(spec.args.joinToString { arg ->
                     "${arg.name}:${arg.type.name}${if (arg.required) " required" else " optional"}"
                 }).append('\n')
             }
             append("JSON:")
         }
-        val generated = generateOrNull(prompt, 96, ACTION_GRAMMAR, {}) ?: return null
+        val fittedPrompt = try {
+            PromptBudget.fit(
+                PromptBudget.Inputs(prompt, emptyList(), null, emptyList(), emptyList()),
+                contextSize - 96,
+                engine::countTokens
+            ).prompt
+        } catch (_: Exception) {
+            return null
+        }
+        val generated = generateOrNull(fittedPrompt, 96, ACTION_GRAMMAR, {}) ?: return null
         val parsed = try { PlannerJson.parse(generated) } catch (_: Exception) { return null }
         val candidate = parsed.singleOrNull() ?: return null
         if (candidate.tool == "web.search") return null
