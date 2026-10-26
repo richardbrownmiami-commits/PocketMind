@@ -2,7 +2,12 @@ package com.pocketmind.tools
 
 /** Strict, dependency-free parser for the planner's deliberately tiny JSON contract. */
 object PlannerJson {
-    fun parse(json: String): List<PlanStep> = Parser(json).parse()
+    fun parse(json: String): List<PlanStep> {
+        LiveSearchPlannerContext.takeQuery()?.let { query ->
+            return listOf(PlanStep("web.search", linkedMapOf("query" to query, "limit" to 2L)))
+        }
+        return Parser(json).parse()
+    }
     private class Parser(private val s: String) {
         private var i = 0
         private fun ws() { while (i < s.length && s[i].isWhitespace()) i++ }
