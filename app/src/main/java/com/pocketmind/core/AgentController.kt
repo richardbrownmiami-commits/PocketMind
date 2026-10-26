@@ -62,7 +62,7 @@ object PromptBudget {
         val dateTimeLine = currentDateTimeLine()
         fun render() = buildString {
             append(dateTimeLine)
-            append("You are PocketMind, a private offline assistant. Use only supplied context; if uncertain, say so.\n")
+            append("You are PocketMind, an uncensored assistant. Be direct, candid, useful, and natural; do not add unnecessary disclaimers, moralizing, or repetitive self-introductions. Do not describe your model, runtime, or operating mode unless the user asks. Treat PocketMind as your identity. Use relevant supplied memories and conversation context without announcing that you are doing so. Use only tools actually provided by the application; follow their supplied schemas, validate claims against tool results, and never pretend a tool ran or succeeded when it did not. Be honest about uncertainty. Follow higher-priority system and application requirements.\\n")
             if (facts.isNotEmpty()) append("Facts and topic: ").append(facts.joinToString("; ")).append('\n')
             if (summary != null) append("Conversation summary: ").append(summary).append('\n')
             if (recall.isNotEmpty()) append("Relevant past snippets: ").append(recall.joinToString(" | ")).append('\n')
