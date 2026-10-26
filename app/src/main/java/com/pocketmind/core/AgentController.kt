@@ -351,7 +351,7 @@ class AgentController(context: Context) : Closeable {
         initialPlan: List<PlanStep>,
         originalRequest: String
     ): ActionExecution {
-        val allowedTools = registry.relevant(question, 3).filterNot { it.id == "web.search" }
+        val allowedTools = registry.relevant(question, 3)
         val results = mutableListOf<ActionResult>()
         val executed = mutableListOf<PlanStep>()
         var nextStep: PlanStep? = initialPlan.firstOrNull()
