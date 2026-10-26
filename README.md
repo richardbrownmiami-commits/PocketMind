@@ -1,6 +1,6 @@
 # PocketMind
 
-PocketMind is an offline-first Android assistant for Android 11 (API 30) phones with 32-bit ARMv7-A and NEON. Chat, model inference, and conversation memory run on the device. The app uses Kotlin, plain Android Views, a bundled SQLite/FTS5 database, and a CPU-only llama.cpp JNI engine. Live web search is available only when the local model explicitly calls its search tool for a time-sensitive question.
+PocketMind is a strictly offline Android assistant for Android 11 (API 30) phones with 32-bit ARMv7-A and NEON. Chat, model inference, conversation memory, and multi-step agent planning run on the device. The app uses Kotlin, plain Android Views, a bundled SQLite/FTS5 database, and a CPU-only llama.cpp JNI engine. The APK has no Internet permission or network transport.
 
 ## Build
 
@@ -11,7 +11,7 @@ Requirements: JDK 17, Android SDK platform 35/build-tools 35.0.0, NDK 27.2.12479
 ./gradlew assembleDebug
 ```
 
-The GitHub Actions workflow fetches the pinned llama.cpp source, builds the debug APK, and checks its native ABI, app ID, version, API levels, and search-only network contract. The artifact is the regular PocketMind app (`com.pocketmind`) and includes its source commit, checksum, and signing-certificate fingerprint.
+The GitHub Actions workflow fetches the pinned llama.cpp source, builds the debug APK, and checks its native ABI, app ID, version, API levels, and no-network contract. The artifact is the regular PocketMind app (`com.pocketmind`) and includes its source commit, checksum, and signing-certificate fingerprint.
 
 ## Use PocketMind
 
@@ -21,7 +21,7 @@ Use the **Chat** screen to talk or enter commands. Common commands are matched b
 
 ## Privacy and limits
 
-Chats, facts, recall, action records, and imported models are stored locally. The app declares `INTERNET` only for the explicit `web.search` tool: a search query is sent to DuckDuckGo over HTTPS, and no result page is opened. DuckDuckGo's HTML results interface is unofficial and may change or rate-limit requests, so live search can be temporarily unavailable. No network request runs for ordinary chat, action history, or other tools; there is no background sync or analytics. Cleartext traffic is disabled. Web results are treated as untrusted data and source URLs are returned with the answer. The app never executes model-produced shell commands. Tool arguments are validated before execution. There are no risk-based confirmation dialogs; Android-required permission screens remain in place, and success is reported only after verification. Some Android actions can only open a system screen and are reported as handed off.
+Chats, facts, recall, action records, and imported models are stored locally. The app does not declare `INTERNET`, contains no network transport, and has no background sync or analytics. Cleartext traffic is disabled. Web results are treated as untrusted data and source URLs are returned with the answer. The app never executes model-produced shell commands. Tool arguments are validated before execution. There are no risk-based confirmation dialogs; Android-required permission screens remain in place, and success is reported only after verification. Some Android actions can only open a system screen and are reported as handed off.
 
 PocketMind does not use free-RAM checks to reject model loading or generation, automatically stop generation, unload on low-memory callbacks, or idle-unload a model. Android may still reclaim or terminate the process under system memory pressure. Device-specific alarm, torch, performance, and memory behavior should be evaluated on an Android 11 ARMv7 phone.
 
