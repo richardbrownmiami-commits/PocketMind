@@ -124,17 +124,33 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
         } catch (_: Exception) { }
 
         val streamed = StringBuilder()
+        val streamLock = Any()
+        val uiUpdatePending = AtomicBoolean(false)
+        var renderedLength = 0
         val firstToken = AtomicBoolean(false)
+
+        fun scheduleStreamUpdate() {
+            if (!uiUpdatePending.compareAndSet(false, true)) return
+            handler.postDelayed({
+                val snapshot: String
+                synchronized(streamLock) { snapshot = streamed.toString() }
+                if (views != null && snapshot.length > renderedLength) {
+                    renderedLength = snapshot.length
+                    adapter?.update(answerRow, snapshot)
+                    scrollToBottom()
+                }
+                uiUpdatePending.set(false)
+                val needsAnotherUpdate = synchronized(streamLock) { streamed.length > renderedLength }
+                if (needsAnotherUpdate && views != null) scheduleStreamUpdate()
+            }, STREAM_UPDATE_MS)
+        }
+
         viewScope?.launch {
             try {
                 val reply = controller.send(text) { chunk ->
                     if (firstToken.compareAndSet(false, true)) handler.post { stopThinking() }
-                    handler.post {
-                        if (views == null) return@post
-                        streamed.append(chunk)
-                        adapter?.update(answerRow, streamed.toString())
-                        scrollToBottom()
-                    }
+                    synchronized(streamLock) { streamed.append(chunk) }
+                    scheduleStreamUpdate()
                 }
                 adapter?.update(answerRow, reply.text, reply.actions)
             } catch (e: Exception) {
@@ -211,5 +227,9 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
         views = null
         adapter = null
         super.onDestroyView()
+    }
+
+    companion object {
+        private const val STREAM_UPDATE_MS = 50L
     }
 }
