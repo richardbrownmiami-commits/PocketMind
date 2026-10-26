@@ -41,4 +41,10 @@
         <item name="strokeColor">@color/primary</item>
         <item name="android:textColor">@color/primary</item>
     </style>
+
+    <style name="Widget.PocketMind.TextInputLayout" parent="Widget.MaterialComponents.TextInputLayout.OutlinedBox">
+        <item name="boxBackgroundColor">@color/surface_variant</item>
+        <item name="boxStrokeColor">@color/primary</item>
+        <item name="hintTextColor">@color/muted</item>
+    </style>
 </resources>

@@ -1,67 +1,86 @@
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/background"
-    android:orientation="vertical">
+    android:background="@color/background">
 
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/chat_list"
-        android:layout_width="match_parent"
+        android:layout_width="0dp"
         android:layout_height="0dp"
-        android:layout_weight="1"
         android:clipToPadding="false"
-        android:overScrollMode="never" />
+        android:overScrollMode="never"
+        android:paddingBottom="@dimen/chat_list_bottom_padding"
+        app:layout_constraintBottom_toTopOf="@id/status_bar"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
 
     <TextView
         android:id="@+id/status_bar"
-        style="@style/TextAppearance.PocketMind.Caption"
-        android:layout_width="match_parent"
+        style="@style/TextAppearance.PocketMind.Mono"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:paddingStart="@dimen/space_12"
         android:paddingTop="@dimen/space_8"
         android:paddingEnd="@dimen/space_12"
         android:paddingBottom="@dimen/space_8"
-        android:text="@string/no_model_loaded" />
+        android:text="@string/no_model_loaded"
+        app:layout_constraintBottom_toTopOf="@id/chat_input_row"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
 
     <LinearLayout
         android:id="@+id/chat_input_row"
-        android:layout_width="match_parent"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:background="@color/surface"
+        android:background="@drawable/bg_chat_input_row"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:padding="@dimen/space_12">
+        android:paddingStart="@dimen/space_12"
+        android:paddingTop="@dimen/space_8"
+        android:paddingEnd="@dimen/space_12"
+        android:paddingBottom="@dimen/space_12"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent">
 
-        <EditText
-            android:id="@+id/message_input"
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/message_input_layout"
+            style="@style/Widget.PocketMind.TextInputLayout"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:backgroundTint="@color/primary"
             android:hint="@string/chat_hint"
-            android:inputType="textCapSentences|textMultiLine"
-            android:maxLines="4"
-            android:minLines="1"
-            android:padding="@dimen/space_8"
-            android:textColor="@color/on_background"
-            android:textColorHint="@color/muted" />
+            app:boxBackgroundMode="outline"
+            app:boxCornerRadiusBottomEnd="@dimen/radius_input"
+            app:boxCornerRadiusBottomStart="@dimen/radius_input"
+            app:boxCornerRadiusTopEnd="@dimen/radius_input"
+            app:boxCornerRadiusTopStart="@dimen/radius_input"
+            app:boxStrokeColor="@color/primary">
 
-        <com.google.android.material.button.MaterialButton
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/message_input"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:imeOptions="actionSend"
+                android:inputType="textCapSentences|textMultiLine"
+                android:maxLines="4"
+                android:minLines="1"
+                android:textColor="@color/on_background"
+                android:textColorHint="@color/muted" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <com.google.android.material.floatingactionbutton.FloatingActionButton
             android:id="@+id/send_button"
-            style="@style/Widget.PocketMind.Button"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
+            android:layout_width="@dimen/fab_size"
+            android:layout_height="@dimen/fab_size"
             android:layout_marginStart="@dimen/space_8"
-            android:text="@string/chat_send" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/stop_button"
-            style="@style/Widget.PocketMind.Button"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="@dimen/space_4"
-            android:backgroundTint="@color/error"
-            android:enabled="false"
-            android:text="@string/chat_stop" />
+            android:contentDescription="@string/chat_send"
+            app:backgroundTint="@color/primary"
+            app:fabCustomSize="@dimen/fab_size"
+            app:elevation="@dimen/elevation_fab"
+            app:srcCompat="@drawable/ic_arrow_upward"
+            app:tint="@color/on_primary" />
     </LinearLayout>
-</LinearLayout>
+</androidx.constraintlayout.widget.ConstraintLayout>

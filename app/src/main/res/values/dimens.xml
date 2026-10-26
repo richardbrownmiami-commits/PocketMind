@@ -6,12 +6,14 @@
     <dimen name="space_20">20dp</dimen>
     <dimen name="space_24">24dp</dimen>
     <dimen name="space_32">32dp</dimen>
+    <dimen name="chat_list_bottom_padding">24dp</dimen>
 
     <dimen name="radius_card">16dp</dimen>
     <dimen name="radius_button">24dp</dimen>
     <dimen name="radius_bubble">20dp</dimen>
     <dimen name="radius_bubble_corner">4dp</dimen>
     <dimen name="radius_input">28dp</dimen>
+    <dimen name="radius_input_row_top">12dp</dimen>
     <dimen name="radius_action_card">12dp</dimen>
     <dimen name="fab_size">48dp</dimen>
 

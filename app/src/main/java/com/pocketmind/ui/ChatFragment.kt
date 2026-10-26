@@ -1,17 +1,19 @@
 package com.pocketmind.ui
 
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.View
-import android.widget.EditText
+import android.view.inputmethod.EditorInfo
 import android.widget.TextView
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import com.google.android.material.button.MaterialButton
+import com.google.android.material.floatingactionbutton.FloatingActionButton
+import com.google.android.material.textfield.TextInputEditText
 import com.pocketmind.PocketMindApplication
 import com.pocketmind.R
 import com.pocketmind.core.GenerationService
@@ -31,9 +33,8 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
     private data class ChatViews(
         val list: RecyclerView,
         val status: TextView,
-        val input: EditText,
-        val send: MaterialButton,
-        val stop: MaterialButton
+        val input: TextInputEditText,
+        val send: FloatingActionButton
     )
 
     private var views: ChatViews? = null
@@ -41,6 +42,7 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
     private var viewScope: CoroutineScope? = null
     private var thinkingJob: Job? = null
     private var thinkingIndex = 0
+    private var generationActive = false
     private val handler = Handler(Looper.getMainLooper())
     private val thinkingMessages = listOf(
         "Sooch raha hoon…",
@@ -66,19 +68,22 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
             },
             status = view.findViewById(R.id.status_bar),
             input = view.findViewById(R.id.message_input),
-            send = view.findViewById(R.id.send_button),
-            stop = view.findViewById(R.id.stop_button)
+            send = view.findViewById(R.id.send_button)
         )
         views = chatViews
         adapter = chatAdapter
         chatViews.status.text = controller.status()
         chatViews.send.isEnabled = false
-        chatViews.send.setOnClickListener { submit() }
-        chatViews.input.setOnEditorActionListener { _, _, _ ->
-            if (chatViews.send.isEnabled) submit()
-            true
+        updateSendButton(generationActive)
+        chatViews.send.setOnClickListener {
+            if (generationActive) controller.stop() else submit()
         }
-        chatViews.stop.setOnClickListener { controller.stop() }
+        chatViews.input.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEND) {
+                if (!generationActive && chatViews.send.isEnabled) submit()
+                true
+            } else false
+        }
         loadHistory()
     }
 
@@ -93,20 +98,21 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
             val activeViews = views ?: return@launch
             adapter?.replace(history)
             activeViews.send.isEnabled = true
+            updateSendButton(generationActive)
             scrollToBottom()
         }
     }
 
     private fun submit() {
         val activeViews = views ?: return
-        val text = activeViews.input.text.toString().trim()
-        if (text.isEmpty() || !activeViews.send.isEnabled) return
+        val text = activeViews.input.text?.toString()?.trim().orEmpty()
+        if (text.isEmpty() || !activeViews.send.isEnabled || generationActive) return
         activeViews.input.setText("")
         adapter?.add("user", text)
         val answerRow = adapter?.add("assistant", "") ?: return
         scrollToBottom()
-        activeViews.send.isEnabled = false
-        activeViews.stop.isEnabled = true
+        generationActive = true
+        updateSendButton(true)
         startThinking(answerRow)
         val context = requireContext()
         try {
@@ -134,15 +140,25 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
                 adapter?.update(answerRow, "PocketMind could not finish: ${e.message ?: "unexpected error"}")
             } finally {
                 stopThinking()
+                generationActive = false
                 views?.let {
                     it.status.text = controller.status()
                     it.send.isEnabled = true
-                    it.stop.isEnabled = false
+                    updateSendButton(false)
                 }
                 context.stopService(Intent(context, GenerationService::class.java))
                 scrollToBottom()
             }
         }
+    }
+
+    private fun updateSendButton(stopping: Boolean) {
+        val button = views?.send ?: return
+        val background = if (stopping) R.color.error else R.color.primary
+        button.setImageResource(if (stopping) R.drawable.ic_stop else R.drawable.ic_arrow_upward)
+        button.backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(requireContext(), background))
+        button.imageTintList = ColorStateList.valueOf(ContextCompat.getColor(requireContext(), R.color.on_primary))
+        button.contentDescription = getString(if (stopping) R.string.chat_stop else R.string.chat_send)
     }
 
     private fun startThinking(answerRow: Int) {
