@@ -28,6 +28,10 @@ internal object ActionRequestPolicy {
         """\b(?:latest|newest|current(?:ly)?|right\s+now|now|today|tonight|tomorrow|this\s+(?:week|month|year|weekend)|next\s+(?:week|month|year|weekend|quarter)|recent(?:ly)?|trending|tranding|viral|upcoming|future|breaking|live|forecast|scheduled)\b""",
         RegexOption.IGNORE_CASE
     )
+    private val explicitWebSearchPattern = Regex(
+        """^(?:(?:please\s+)?(?:search|find|look\s+up|look\s+for)\s+(?:(?:the|on|in)\s+)?(?:web|internet|online)|(?:search|find|look\s+up|look\s+for)\s+(?:the\s+)?(?:web|internet|online)\s+(?:for\s+)?|(?:web|internet|online)\s+(?:search|search\s+for))\b.*$""",
+        RegexOption.IGNORE_CASE
+    )
     private val liveLookupStartPattern = Regex(
         """^(?:(?:what|who|when|where|which|why|how|is|are|was|were|will|has|have|do|does|did|can|could)\b|(?:tell\s+me|show\s+me|find|search(?:\s+for)?|look\s+up|give\s+me|list|get|check|latest|newest|current|recent|upcoming|trending|tranding|future|forecast)\b)""",
         RegexOption.IGNORE_CASE
@@ -37,10 +41,11 @@ internal object ActionRequestPolicy {
         RegexOption.IGNORE_CASE
     )
 
-    /** Live web access requires an explicit freshness-oriented lookup, never ambient chat. */
+    /** Live web access requires either an explicit web-search command or a freshness-oriented lookup. */
     fun isLiveSearchRequest(text: String): Boolean {
         val clean = text.trim().trimEnd('.', '?', '!').trim()
         if (clean.isEmpty() || selfDirectedChatPattern.containsMatchIn(clean)) return false
+        if (explicitWebSearchPattern.matches(clean)) return true
         val asksForInformation = liveLookupStartPattern.containsMatchIn(clean) || text.trim().endsWith('?')
         return asksForInformation && liveFreshnessPattern.containsMatchIn(clean)
     }
