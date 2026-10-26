@@ -25,7 +25,8 @@ class ChatAdapter : RecyclerView.Adapter<ChatAdapter.Holder>() {
         var text: String,
         val time: Long = System.currentTimeMillis(),
         var actions: List<ActionResult> = emptyList(),
-        var thinking: Boolean = false
+        var thinking: Boolean = false,
+        var animateOnInsert: Boolean = false
     )
 
     private val lines = mutableListOf<Line>()
@@ -37,6 +38,8 @@ class ChatAdapter : RecyclerView.Adapter<ChatAdapter.Holder>() {
         val message: TextView = itemView.findViewById(R.id.message_text)
         val actions: LinearLayout = itemView.findViewById(R.id.action_cards)
         val timestamp: TextView = itemView.findViewById(R.id.message_timestamp)
+        var boundMessage: String? = null
+        var boundThinking: Boolean = false
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
@@ -54,9 +57,34 @@ class ChatAdapter : RecyclerView.Adapter<ChatAdapter.Holder>() {
         holder.row.gravity = Gravity.TOP or if (isUser) Gravity.END else Gravity.START
         holder.bubble.setBackgroundResource(if (isUser) R.drawable.bg_chat_user_bubble else R.drawable.bg_chat_assistant_bubble)
         holder.message.maxWidth = maxWidth
-        holder.message.text = line.text.ifBlank { if (isUser) "" else "…" }
+        val displayText = line.text.ifBlank { if (isUser) "" else "…" }
+        if (line.thinking && holder.boundThinking && holder.boundMessage != displayText) {
+            holder.message.animate().cancel()
+            holder.message.animate().alpha(0f).setDuration(100L).withEndAction {
+                holder.message.text = displayText
+                holder.message.alpha = 0f
+                holder.message.animate().alpha(1f).setDuration(150L).start()
+            }.start()
+        } else {
+            holder.message.animate().cancel()
+            holder.message.alpha = 1f
+            holder.message.text = displayText
+        }
+        holder.boundMessage = displayText
+        holder.boundThinking = line.thinking
         holder.message.setTextColor(ContextCompat.getColor(context, if (isUser) R.color.on_background else R.color.on_surface))
         holder.message.typeface = Typeface.create("sans-serif", if (line.thinking) Typeface.ITALIC else Typeface.NORMAL)
+
+        if (line.animateOnInsert) {
+            line.animateOnInsert = false
+            holder.row.animate().cancel()
+            holder.row.alpha = 0f
+            holder.row.translationX = context.resources.getDimension(R.dimen.space_16)
+            holder.row.animate().alpha(1f).translationX(0f).setDuration(250L).start()
+        } else {
+            holder.row.alpha = 1f
+            holder.row.translationX = 0f
+        }
 
         holder.badge.visibility = if (!isUser && firstInGroup) View.VISIBLE else View.GONE
         holder.timestamp.visibility = if (firstInGroup) View.VISIBLE else View.GONE
@@ -97,8 +125,19 @@ class ChatAdapter : RecyclerView.Adapter<ChatAdapter.Holder>() {
 
     override fun getItemCount(): Int = lines.size
 
-    fun add(role: String, text: String, thinking: Boolean = false): Int {
-        lines.add(Line(role = role, text = text, thinking = thinking))
+    override fun onViewRecycled(holder: Holder) {
+        holder.row.animate().cancel()
+        holder.message.animate().cancel()
+        holder.row.alpha = 1f
+        holder.row.translationX = 0f
+        holder.message.alpha = 1f
+        holder.boundMessage = null
+        holder.boundThinking = false
+        super.onViewRecycled(holder)
+    }
+
+    fun add(role: String, text: String, thinking: Boolean = false, animateOnInsert: Boolean = false): Int {
+        lines.add(Line(role = role, text = text, thinking = thinking, animateOnInsert = animateOnInsert))
         val index = lines.lastIndex
         notifyItemInserted(index)
         return index

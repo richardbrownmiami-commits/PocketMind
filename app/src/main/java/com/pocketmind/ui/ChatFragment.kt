@@ -1,5 +1,6 @@
 package com.pocketmind.ui
 
+import android.animation.ValueAnimator
 import android.content.Intent
 import android.content.res.ColorStateList
 import android.os.Bundle
@@ -108,7 +109,7 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
         val text = activeViews.input.text?.toString()?.trim().orEmpty()
         if (text.isEmpty() || !activeViews.send.isEnabled || generationActive) return
         activeViews.input.setText("")
-        adapter?.add("user", text)
+        adapter?.add("user", text, animateOnInsert = true)
         val answerRow = adapter?.add("assistant", "", thinking = true) ?: return
         scrollToBottom()
         generationActive = true
@@ -155,8 +156,14 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
     private fun updateSendButton(stopping: Boolean) {
         val button = views?.send ?: return
         val background = if (stopping) R.color.error else R.color.primary
+        val targetColor = ContextCompat.getColor(requireContext(), background)
+        val startColor = button.backgroundTintList?.defaultColor ?: targetColor
         button.setImageResource(if (stopping) R.drawable.ic_stop else R.drawable.ic_arrow_upward)
-        button.backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(requireContext(), background))
+        ValueAnimator.ofArgb(startColor, targetColor).apply {
+            duration = 200L
+            addUpdateListener { button.backgroundTintList = ColorStateList.valueOf(it.animatedValue as Int) }
+            start()
+        }
         button.imageTintList = ColorStateList.valueOf(ContextCompat.getColor(requireContext(), R.color.on_primary))
         button.contentDescription = getString(if (stopping) R.string.chat_stop else R.string.chat_send)
     }

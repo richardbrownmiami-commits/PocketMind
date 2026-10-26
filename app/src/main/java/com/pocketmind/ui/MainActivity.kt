@@ -5,11 +5,10 @@ import android.view.Menu
 import android.view.MenuItem
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import androidx.fragment.app.Fragment
-import androidx.fragment.app.FragmentTransaction
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.transition.MaterialFadeThrough
 import com.pocketmind.R
 import com.pocketmind.memory.AppDatabase
 import com.pocketmind.memory.clearMemory
@@ -56,9 +55,12 @@ class MainActivity : AppCompatActivity() {
             TAG_MODELS -> ModelsFragment()
             else -> MemoryFragment()
         }
+        current?.exitTransition = MaterialFadeThrough().apply { duration = TRANSITION_DURATION_MS }
+        current?.returnTransition = MaterialFadeThrough().apply { duration = TRANSITION_DURATION_MS }
+        fragment.enterTransition = MaterialFadeThrough().apply { duration = TRANSITION_DURATION_MS }
+        fragment.reenterTransition = MaterialFadeThrough().apply { duration = TRANSITION_DURATION_MS }
         supportFragmentManager.beginTransaction()
             .setReorderingAllowed(true)
-            .setTransition(FragmentTransaction.TRANSIT_FRAGMENT_FADE)
             .replace(R.id.fragment_container, fragment, destination)
             .addToBackStack(destination)
             .commit()
@@ -115,6 +117,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
+        private const val TRANSITION_DURATION_MS = 250L
         private const val TAG_CHAT = "chat"
         private const val TAG_MODELS = "models"
         private const val TAG_MEMORY = "memory"
