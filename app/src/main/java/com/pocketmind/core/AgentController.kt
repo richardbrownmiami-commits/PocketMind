@@ -413,6 +413,7 @@ class AgentController(context: Context) : Closeable {
     private fun stepSignature(step: PlanStep): String =
         step.tool + ":" + step.args.toSortedMap().entries.joinToString("|") { "${it.key}=${it.value}" }
 
+    private fun executeValidatedPlan(steps: List<PlanStep>, originalRequest: String, source: String): ActionExecution {
         val invalid = validator.validatePlan(steps)
         if (invalid != null) {
             steps.forEach { step ->
