@@ -53,7 +53,7 @@ jobs:
           {
             printf 'commit=%s\n' "$COMMIT_SHA"
             printf 'applicationId=com.pocketmind\nversionName=%s\nversionCode=%s\n' "$VERSION_NAME" "$VERSION_CODE"
-            printf 'minSdk=30\ntargetSdk=30\nabi=armeabi-v7a\nINTERNET_permission=true\nnetwork_scope=explicit-model-called-web.search-only\nlastPromptTokens=runtime-only\n'
+            printf 'minSdk=30\ntargetSdk=30\nabi=armeabi-v7a\nINTERNET_permission=false\nnetwork_scope=none\nlastPromptTokens=runtime-only\n'
           } > dist/BUILD_INFO.txt
       - name: Verify APK checksum
         run: (cd dist && sha256sum -c SHA256SUMS.txt)
