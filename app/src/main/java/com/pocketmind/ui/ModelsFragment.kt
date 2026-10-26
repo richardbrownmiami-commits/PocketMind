@@ -26,10 +26,12 @@ import java.io.File
 class ModelsFragment : Fragment(R.layout.fragment_models) {
     private data class ModelViews(
         val list: LinearLayout,
+        val emptyState: LinearLayout,
+        val count: TextView,
         val message: TextView,
         val status: TextView,
         val progress: ProgressBar,
-        val importButton: MaterialButton,
+        val importButton: MaterialCardView,
         val loadButton: MaterialButton,
         val unloadButton: MaterialButton
     )
@@ -47,6 +49,8 @@ class ModelsFragment : Fragment(R.layout.fragment_models) {
         viewScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         views = ModelViews(
             list = view.findViewById(R.id.model_list),
+            emptyState = view.findViewById(R.id.empty_model_state),
+            count = view.findViewById(R.id.model_count),
             message = view.findViewById(R.id.models_message),
             status = view.findViewById(R.id.models_status),
             progress = view.findViewById(R.id.import_progress),
@@ -84,18 +88,11 @@ class ModelsFragment : Fragment(R.layout.fragment_models) {
         activeViews.list.removeAllViews()
         val selected = store.selected()?.absolutePath
         val entries = store.list()
+        activeViews.count.text = getString(R.string.model_count, entries.size)
+        activeViews.emptyState.visibility = if (entries.isEmpty()) View.VISIBLE else View.GONE
+        activeViews.list.visibility = if (entries.isEmpty()) View.GONE else View.VISIBLE
         if (entries.isEmpty()) {
-            activeViews.list.addView(TextView(requireContext()).apply {
-                setTextAppearance(R.style.TextAppearance_PocketMind_Body)
-                setTextColor(ContextCompat.getColor(requireContext(), R.color.muted))
-                text = getString(R.string.models_empty)
-                setPadding(
-                    resources.getDimensionPixelSize(R.dimen.space_12),
-                    resources.getDimensionPixelSize(R.dimen.space_12),
-                    resources.getDimensionPixelSize(R.dimen.space_12),
-                    resources.getDimensionPixelSize(R.dimen.space_12)
-                )
-            })
+            activeViews.message.text = ""
         }
         entries.forEach { model ->
             activeViews.list.addView(modelCard(model.file, model.bytes, model.file.absolutePath == selected))

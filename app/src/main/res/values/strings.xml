@@ -13,8 +13,10 @@
     <string name="no_model_loaded">No model loaded</string>
     <string name="models_title">On-device Models</string>
     <string name="models_subtitle">GGUF · Q4/Q5 · up to 1.2 GB</string>
+    <string name="model_count">%1$d models stored privately on this device</string>
     <string name="models_empty">No GGUF models yet. Import a small Q4/Q5 model (up to 1.2 GB).</string>
     <string name="import_gguf">Import GGUF</string>
+    <string name="import_tile_subtitle">Tap to choose a GGUF file</string>
     <string name="load_model">Load model</string>
     <string name="unload_model">Unload model</string>
     <string name="memory_title">Memory</string>
