@@ -8,6 +8,7 @@ import com.pocketmind.memory.AppDatabase
 import com.pocketmind.memory.FactStore
 import com.pocketmind.memory.FollowUpResolver
 import com.pocketmind.memory.MessageStore
+import com.pocketmind.memory.MemoryRules
 import com.pocketmind.memory.RecallStore
 import com.pocketmind.memory.SummaryStore
 import com.pocketmind.memory.TopicState
@@ -47,7 +48,7 @@ object PromptBudget {
         val recall: List<String>,
         val summary: String?,
         val facts: List<String>,
-        val turns: List<String>
+        val lastExchange: List<String>
     )
     data class Result(val prompt: String, val dropped: List<String>, val tokens: Int)
 
@@ -56,7 +57,7 @@ object PromptBudget {
         var recall = inputs.recall.take(2).map { it.take(700) }
         var summary = inputs.summary
         var facts = inputs.facts.toList()
-        var turns = inputs.turns.toList()
+        var lastExchange = inputs.lastExchange.toList()
         val dropped = mutableListOf<String>()
         val dateTimeLine = currentDateTimeLine()
         fun render() = buildString {
@@ -65,7 +66,7 @@ object PromptBudget {
             if (facts.isNotEmpty()) append("Facts and topic: ").append(facts.joinToString("; ")).append('\n')
             if (summary != null) append("Conversation summary: ").append(summary).append('\n')
             if (recall.isNotEmpty()) append("Relevant past snippets: ").append(recall.joinToString(" | ")).append('\n')
-            if (turns.isNotEmpty()) append("Recent conversation:\n").append(turns.joinToString("\n")).append('\n')
+            if (lastExchange.isNotEmpty()) append("Last exchange:\n").append(lastExchange.joinToString("\n")).append('\n')
             append("User question: ").append(inputs.question).append("\nAssistant:")
         }
         var prompt = render()
@@ -79,8 +80,8 @@ object PromptBudget {
         while (tokens > contextTokens && facts.isNotEmpty()) {
             facts = facts.dropLast(1); dropped += "facts"; prompt = render(); tokens = countTokens(prompt)
         }
-        while (tokens > contextTokens && turns.isNotEmpty()) {
-            turns = turns.drop(1); dropped += "turns"; prompt = render(); tokens = countTokens(prompt)
+        if (tokens > contextTokens && lastExchange.isNotEmpty()) {
+            lastExchange = emptyList(); dropped += "last exchange"; prompt = render(); tokens = countTokens(prompt)
         }
         require(tokens <= contextTokens) { "Question and required prompt instructions exceed the available model context" }
         return Result(prompt, dropped, tokens)
@@ -278,13 +279,14 @@ class AgentController(context: Context) : Closeable {
             return@withContext AgentReply(noPlanReply)
         }
 
-        val currentRecall = if (preferences.getBoolean("recall_enabled", true)) recall.recall(resolved, userId).take(2).map { it.text }.let { capChars(it, 700) } else emptyList()
-        val factContext = if (preferences.getBoolean("facts_enabled", true)) facts.relevant(resolved, 3).map { "${it.key}: ${it.value}" }.toMutableList() else mutableListOf()
+        val memoryNeeds = MemoryRules.memoryNeeds(raw)
+        val currentRecall = if (memoryNeeds.recall && preferences.getBoolean("recall_enabled", true)) recall.recall(resolved, userId).take(2).map { it.text }.let { capChars(it, 700) } else emptyList()
+        val factContext = if (memoryNeeds.facts && preferences.getBoolean("facts_enabled", true)) facts.relevant(resolved, 3).map { "${it.key}: ${it.value}" }.toMutableList() else mutableListOf()
         topic?.let { factContext.add("Current topic: ${it.entity}") }
-        val turnWindow = messages.recent(9).filter { it.id != userId }.takeLast(8).map { "${it.role}: ${it.content}" }
+        val lastExchange = messages.lastExchangeBefore(userId).map { "${it.role}: ${it.content}" }
         val fittedPrompt = try {
             PromptBudget.fit(
-                PromptBudget.Inputs(resolved, currentRecall, summaries.get(), factContext, turnWindow),
+                PromptBudget.Inputs(resolved, currentRecall, summaries.get(), factContext, lastExchange),
                 contextSize - ANSWER_TOKENS,
                 engine::countTokens
             )

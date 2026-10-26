@@ -53,6 +53,8 @@ class MessageStore(private val db: SQLiteDatabase) {
     }
 
     fun recent(limit: Int = 8): List<Message> = query("SELECT id,role,content,time FROM messages ORDER BY id DESC LIMIT ?", arrayOf(limit.coerceIn(0, 100).toString())).reversed()
+    fun lastExchangeBefore(messageId: Long): List<Message> =
+        query("SELECT id,role,content,time FROM messages WHERE id<? AND role IN ('user','assistant') ORDER BY id DESC LIMIT 2", arrayOf(messageId.toString())).reversed()
     fun all(): List<Message> = query("SELECT id,role,content,time FROM messages ORDER BY id")
     fun find(id: Long): Message? = query("SELECT id,role,content,time FROM messages WHERE id=?", arrayOf(id.toString())).firstOrNull()
 
@@ -141,7 +143,14 @@ class FactStore(private val db: SQLiteDatabase) {
 
     fun relevant(query: String, limit: Int = 3): List<Fact> {
         val terms = query.lowercase().split(Regex("\\W+")).filter { it.length > 2 }.toSet()
-        return all().map { fact -> fact to terms.count { term -> "${fact.key} ${fact.value}".lowercase().contains(term) } }
+        if (terms.isEmpty()) return emptyList()
+        val predicate = terms.joinToString(" OR ") { "(lower(key) LIKE ? OR lower(value) LIKE ?)" }
+        val args = terms.flatMap { term -> listOf("%$term%", "%$term%") }.toTypedArray()
+        val candidates = mutableListOf<Fact>()
+        db.forEach("SELECT key,value,auto FROM facts WHERE $predicate ORDER BY created DESC", args) { c ->
+            candidates.add(Fact(c.text("key"), c.text("value"), c.getInt(2) != 0))
+        }
+        return candidates.map { fact -> fact to terms.count { term -> "${fact.key} ${fact.value}".lowercase().contains(term) } }
             .filter { it.second > 0 }.sortedByDescending { it.second }.take(limit.coerceIn(0, 3)).map { it.first }
     }
 
