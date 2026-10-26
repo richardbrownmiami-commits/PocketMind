@@ -18,7 +18,7 @@ internal object ActionRequestPolicy {
         Regex("""^why\s+did\s+you\s+(?:do\s+that|set|start|turn\s+on|turn\s+off|open|change)\b.*$""", RegexOption.IGNORE_CASE)
     )
 
-    /** History is a model-planned tool call only for an explicit request, never ambient chat context. */
+    /** History is a model-planned tool call only for an explicit request, never ambient chat. */
     fun isActionHistoryRequest(text: String): Boolean {
         val clean = text.trim().trimEnd('.', '?', '!').trim()
         return clean.isNotEmpty() && historyRequestPatterns.any { it.matches(clean) }
@@ -29,7 +29,7 @@ internal object ActionRequestPolicy {
         RegexOption.IGNORE_CASE
     )
     private val explicitWebSearchPattern = Regex(
-        """^(?:(?:please\s+)?(?:search|find|look\s+up|look\s+for)\s+(?:(?:the|on|in)\s+)?(?:web|internet|online)|(?:search|find|look\s+up|look\s+for)\s+(?:the\s+)?(?:web|internet|online)\s+(?:for\s+)?|(?:web|internet|online)\s+(?:search|search\s+for))\b.*$""",
+        """^(?:(?:(?:please|can|could|would)\s+)?(?:you\s+)?(?:search|find|look\s+up|look\s+for)\s+(?:(?:the|on|in)\s+)?(?:web|internet|online)(?:\s+for)?\b|(?:(?:please|can|could|would)\s+)?(?:you\s+)?(?:search|find|look\s+up|look\s+for)\s+(?:the\s+)?(?:web|internet|online)\s+for\b|(?:(?:please|can|could|would)\s+)?(?:use|do)\s+(?:the\s+)?(?:web|internet|online)\s+search\b|(?:web|internet|online)\s+(?:search|search\s+for)\b).*$""",
         RegexOption.IGNORE_CASE
     )
     private val liveLookupStartPattern = Regex(
