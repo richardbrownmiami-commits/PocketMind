@@ -198,6 +198,13 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
     }
 
     override fun onDestroyView() {
+        // The model call is owned by this view. If the view goes away, stop native
+        // inference too; otherwise the cancelled coroutine can leave the JNI engine
+        // running with no UI consumer, wasting CPU and delaying the next request.
+        if (generationActive) {
+            controller.stop()
+            generationActive = false
+        }
         stopThinking()
         viewScope?.cancel()
         viewScope = null
