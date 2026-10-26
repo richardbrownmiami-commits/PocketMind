@@ -1,0 +1,16 @@
+<resources>
+    <color name="background">#0D1410</color>
+    <color name="surface">#161D19</color>
+    <color name="surface_variant">#1F2B24</color>
+    <color name="primary">#4CAF82</color>
+    <color name="primary_dim">#2E6B4F</color>
+    <color name="on_primary">#FFFFFF</color>
+    <color name="secondary">#C9A84C</color>
+    <color name="error">#CF6679</color>
+    <color name="on_background">#E8F0EB</color>
+    <color name="on_surface">#C4CEC8</color>
+    <color name="muted">#5A6B62</color>
+    <color name="user_bubble">#1A3D2B</color>
+    <color name="bot_bubble">#1C2620</color>
+    <color name="divider">#232F28</color>
+</resources>

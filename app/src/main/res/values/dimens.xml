@@ -1,0 +1,28 @@
+<resources>
+    <dimen name="space_4">4dp</dimen>
+    <dimen name="space_8">8dp</dimen>
+    <dimen name="space_12">12dp</dimen>
+    <dimen name="space_16">16dp</dimen>
+    <dimen name="space_20">20dp</dimen>
+    <dimen name="space_24">24dp</dimen>
+    <dimen name="space_32">32dp</dimen>
+
+    <dimen name="radius_card">16dp</dimen>
+    <dimen name="radius_button">24dp</dimen>
+    <dimen name="radius_bubble">20dp</dimen>
+    <dimen name="radius_bubble_corner">4dp</dimen>
+    <dimen name="radius_input">28dp</dimen>
+    <dimen name="radius_action_card">12dp</dimen>
+    <dimen name="fab_size">48dp</dimen>
+
+    <dimen name="elevation_card">1dp</dimen>
+    <dimen name="elevation_bottom_bar">8dp</dimen>
+    <dimen name="elevation_fab">6dp</dimen>
+    <dimen name="elevation_dialog">24dp</dimen>
+
+    <dimen name="text_size_display">20sp</dimen>
+    <dimen name="text_size_body">15sp</dimen>
+    <dimen name="text_size_caption">12sp</dimen>
+    <dimen name="text_size_label">13sp</dimen>
+    <dimen name="text_size_mono">13sp</dimen>
+</resources>

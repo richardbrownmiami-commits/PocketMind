@@ -1,0 +1,29 @@
+<resources>
+    <style name="TextAppearance.PocketMind" parent="@android:style/TextAppearance" />
+
+    <style name="TextAppearance.PocketMind.Display" parent="TextAppearance.PocketMind">
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:textSize">@dimen/text_size_display</item>
+        <item name="android:textColor">@color/on_background</item>
+    </style>
+    <style name="TextAppearance.PocketMind.Body" parent="TextAppearance.PocketMind">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textSize">@dimen/text_size_body</item>
+        <item name="android:textColor">@color/on_surface</item>
+    </style>
+    <style name="TextAppearance.PocketMind.Caption" parent="TextAppearance.PocketMind">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textSize">@dimen/text_size_caption</item>
+        <item name="android:textColor">@color/muted</item>
+    </style>
+    <style name="TextAppearance.PocketMind.Label" parent="TextAppearance.PocketMind">
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:textSize">@dimen/text_size_label</item>
+        <item name="android:textColor">@color/on_background</item>
+    </style>
+    <style name="TextAppearance.PocketMind.Mono" parent="TextAppearance.PocketMind">
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:textSize">@dimen/text_size_mono</item>
+        <item name="android:textColor">@color/muted</item>
+    </style>
+</resources>
