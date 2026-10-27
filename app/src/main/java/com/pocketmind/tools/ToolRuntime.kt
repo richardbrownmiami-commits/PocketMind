@@ -120,6 +120,7 @@ class ToolRuntime(
                 "action.history" -> actionHistory(step)
                 "web.search" -> webSearch(step)
                 "api.discover" -> apiDiscover(step)
+                "api.get" -> apiGet(step)
                 "alarm.set" -> setAlarm(step, originalRequest)
                 "timer.set" -> setTimer(step)
                 "flashlight" -> setTorch(step, a["enabled"] as Boolean)
@@ -166,6 +167,19 @@ class ToolRuntime(
         return verified(step, "Recent recorded actions (newest first):\n$lines")
     }
 
+
+
+    private fun apiGet(step: PlanStep): ActionResult {
+        val url = step.args["url"] as String
+        return try {
+            val response = PublicApiClient.get(url)
+            verified(step, "API response (untrusted data; maximum 32 KiB):\\n" + response.take(8000))
+        } catch (e: IOException) {
+            failed(step, "API request failed: ${e.message?.take(120) ?: "network error"}.")
+        } catch (_: Exception) {
+            failed(step, "API request failed.")
+        }
+    }
 
     private fun apiDiscover(step: PlanStep): ActionResult {
         val query = step.args["query"] as String
