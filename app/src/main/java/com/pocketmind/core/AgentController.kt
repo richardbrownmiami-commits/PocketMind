@@ -638,7 +638,7 @@ class AgentController(context: Context) : Closeable {
 
     companion object {
         private const val DEFAULT_CONTEXT = 512
-        private const val DEFAULT_THREADS = 2
+        private const val DEFAULT_THREADS = 4
         private const val ANSWER_TOKENS = 128
         private const val MAX_AGENT_STEPS = 4
         private val GENERATION_STOP_MARKERS = listOf("\nuser:", "\nUser:", "\nassistant:", "\nAssistant:", "\nHuman:")
