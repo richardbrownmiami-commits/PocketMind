@@ -72,6 +72,10 @@ class ToolValidator(private val registry: ToolRegistry = ToolRegistry()) {
             if ((step.args["query"] as String).length > 240) return "Search query must be 240 characters or fewer"
             if (step.args["limit"] != null && (step.args["limit"] as Number).toLong() !in 1L..2L) return "Search limit must be 1 or 2"
         }
+        if (step.tool == "api.discover") {
+            if ((step.args["query"] as String).length > 160) return "API discovery query must be 160 characters or fewer"
+            if (step.args["limit"] != null && (step.args["limit"] as Number).toLong() !in 1L..3L) return "API discovery limit must be 1 to 3"
+        }
         if (step.tool == "volume") {
             val hasLevel = step.args.containsKey("level")
             val hasStep = step.args.containsKey("step")
