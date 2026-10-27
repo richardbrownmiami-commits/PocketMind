@@ -83,12 +83,17 @@ internal object LiveWebSearch {
         }
     }
 
-    private fun elementsWithClass(html: String, className: String): List<Pair<String, String>> =
-        anchorRegex.findAll(html).mapNotNull { match ->
-            val attributes = match.groupValues[1]
+    private fun elementsWithClass(html: String, className: String): List<Pair<String, String>> {
+        // Search-result snippets are commonly <td>/<div> elements, not anchors.
+        // Parsing only <a> tags silently discarded every snippet and made the
+        // agent treat valid search hits as title-only results.
+        val elementRegex = Regex("""(?is)<([a-z][a-z0-9]*)\\b([^>]*)>(.*?)</\\1\\s*>""")
+        return elementRegex.findAll(html).mapNotNull { match ->
+            val attributes = match.groupValues[2]
             val classes = attribute(attributes, "class")?.split(Regex("\\s+")) ?: return@mapNotNull null
-            if (className !in classes) null else attributes to match.groupValues[2]
+            if (className !in classes) null else attributes to match.groupValues[3]
         }.toList()
+    }
 
     private fun attribute(attributes: String, name: String): String? =
         attributeRegex.findAll(attributes).firstOrNull { it.groupValues[1].equals(name, ignoreCase = true) }
