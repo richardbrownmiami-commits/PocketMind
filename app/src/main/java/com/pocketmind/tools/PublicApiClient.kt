@@ -13,8 +13,17 @@ import javax.net.ssl.HttpsURLConnection
 /** Read-only discovery against the public APIs.guru catalog. */
 internal object PublicApiClient {
     fun discover(query: String, limit: Int): String {
-        val terms = query.lowercase(Locale.ROOT).split(Regex("[^a-z0-9]+")).filter { it.length > 1 }.toSet()
-        if (terms.isEmpty()) throw IOException("Enter an API topic or provider name.")
+        val baseTerms = query.lowercase(Locale.ROOT).split(Regex("[^a-z0-9]+")).filter { it.length > 1 }.toSet()
+        if (baseTerms.isEmpty()) throw IOException("Enter an API topic or provider name.")
+        val aliases = mapOf(
+            "weather" to setOf("weather.gov", "openweathermap.org", "weatherapi.com"),
+            "maps" to setOf("mapbox.com", "openstreetmap.org", "googleapis.com"),
+            "currency" to setOf("frankfurter.app", "exchangerate.host", "openexchangerates.org"),
+            "github" to setOf("github.com"),
+            "news" to setOf("newsapi.org", "thenewsapi.com"),
+            "books" to setOf("openlibrary.org", "googleapis.com")
+        )
+        val terms = baseTerms + baseTerms.flatMap { aliases[it].orEmpty() }
         val providersConnection = open("https://api.apis.guru/v2/providers.json")
         val providersText = try { readBounded(providersConnection, 250000) } finally { providersConnection.disconnect() }
         val providers = JSONObject(providersText).optJSONArray("data") ?: throw IOException("Unexpected API catalog response.")
