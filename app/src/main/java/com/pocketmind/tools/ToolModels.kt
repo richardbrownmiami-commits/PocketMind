@@ -73,6 +73,10 @@ class ToolValidator(private val registry: ToolRegistry = ToolRegistry()) {
             if ((step.args["url"] as String).length > 2048) return "API URL must be 2048 characters or fewer"
             if (!(step.args["url"] as String).startsWith("https://", ignoreCase = true)) return "API URL must use HTTPS"
         }
+        if (step.tool == "api.discover") {
+            if ((step.args["query"] as String).length > 160) return "API discovery query must be 160 characters or fewer"
+            if (step.args["limit"] != null && (step.args["limit"] as Number).toLong() !in 1L..3L) return "API discovery limit must be 1 to 3"
+        }
         if (step.tool == "web.search") {
             if ((step.args["query"] as String).length > 240) return "Search query must be 240 characters or fewer"
             if (step.args["limit"] != null && (step.args["limit"] as Number).toLong() !in 1L..2L) return "Search limit must be 1 or 2"
