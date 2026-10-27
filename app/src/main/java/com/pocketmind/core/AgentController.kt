@@ -207,14 +207,6 @@ class AgentController(context: Context) : Closeable {
         val explicitHistoryRequest = ActionRequestPolicy.isActionHistoryRequest(raw)
         val explicitLiveSearchRequest = ActionRequestPolicy.isLiveSearchRequest(raw)
         val actionRequest = explicitHistoryRequest || explicitLiveSearchRequest || ActionRequestPolicy.looksLikeAction(raw, ruleMatched = rule != null)
-        if (explicitLiveSearchRequest) {
-            val userId = messages.append("user", raw)
-            indexRecall(userId, raw)
-            val answer = "Live web search is disabled in strict offline mode. I can search saved notes or answer using the on-device model."
-            val assistantId = messages.append("assistant", answer)
-            indexRecall(assistantId, answer)
-            return@withContext AgentReply(answer)
-        }
         if (rule != null) {
             val userId = messages.append("user", raw)
             indexRecall(userId, raw)
