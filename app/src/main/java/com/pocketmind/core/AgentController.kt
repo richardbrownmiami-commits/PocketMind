@@ -343,7 +343,7 @@ class AgentController(context: Context) : Closeable {
         initialPlan: List<PlanStep>,
         originalRequest: String
     ): ActionExecution {
-        val allowedTools = registry.relevant(question, 3)
+        val allowedTools = relevantToolsForRequest(question)
         val results = mutableListOf<ActionResult>()
         val executed = mutableListOf<PlanStep>()
         var nextStep: PlanStep? = initialPlan.firstOrNull()
@@ -500,6 +500,14 @@ class AgentController(context: Context) : Closeable {
         append("User request: ").append(question).append("\nJSON:")
     }
 
+    private fun relevantToolsForRequest(question: String): List<ToolSpec> {
+        val onlineRequest = Regex("(?i)\\b(?:api|apis|openapi|endpoint|web|internet|online|search online|search the web)\\b").containsMatchIn(question)
+        val relevant = registry.relevant(question, if (onlineRequest) 5 else 3)
+        if (!onlineRequest) return relevant
+        val online = listOfNotNull(registry.get("web.search"), registry.get("api.discover"), registry.get("api.get"))
+        return (online + relevant).distinctBy { it.id }.take(5)
+    }
+
     private fun buildPlan(
         question: String,
         actionRequest: Boolean,
@@ -508,7 +516,7 @@ class AgentController(context: Context) : Closeable {
         val relevantTools = if (historyIntent) {
             listOfNotNull(registry.get("action.history"))
         } else {
-            registry.relevant(question, 3)
+            relevantToolsForRequest(question)
         }
         if (relevantTools.isEmpty() || !actionRequest) return null
         val planText = generateOrNull(plannerPrompt(question, relevantTools), 160, ACTION_GRAMMAR, {}) ?: return null
