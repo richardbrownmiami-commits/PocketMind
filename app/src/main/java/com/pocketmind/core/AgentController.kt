@@ -343,7 +343,7 @@ class AgentController(context: Context) : Closeable {
     private data class ActionExecution(val results: List<ActionResult>)
 
     /**
-     * Local-only observe/act/replan loop. Each side effect is executed separately and the next
+     * On-device planner observe/act/replan loop with approved online tools. Each side effect is executed separately and the next
      * decision receives the verified outcome. Failures and Android hand-offs stop the loop so
      * a partially completed action is never blindly repeated.
      */
