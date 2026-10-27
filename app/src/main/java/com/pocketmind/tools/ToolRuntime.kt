@@ -173,7 +173,7 @@ class ToolRuntime(
         val url = step.args["url"] as String
         return try {
             val response = PublicApiClient.get(url)
-            verified(step, "API response (untrusted data; maximum 32 KiB):\\n" + response.take(8000))
+            verified(step, "API response (untrusted data; maximum 32 KiB):\n" + response.take(8000))
         } catch (e: IOException) {
             failed(step, "API request failed: ${e.message?.take(120) ?: "network error"}.")
         } catch (_: Exception) {
