@@ -322,7 +322,7 @@ class AgentController(context: Context) : Closeable {
         if (loadedPath == file.absolutePath) return@withContext "Model is already loaded."
         unloadInternal()
         val requestedContext = DEFAULT_CONTEXT
-        val threads = Runtime.getRuntime().availableProcessors().coerceIn(1, 6).coerceAtMost(DEFAULT_THREADS)
+        val threads = Runtime.getRuntime().availableProcessors().coerceIn(1, MAX_MODEL_THREADS)
         return@withContext try {
             engine.load(file.absolutePath, nCtx = requestedContext, nBatch = minOf(256, requestedContext), nUbatch = 128, threads = threads)
             loadedPath = file.absolutePath
@@ -638,7 +638,7 @@ class AgentController(context: Context) : Closeable {
 
     companion object {
         private const val DEFAULT_CONTEXT = 512
-        private const val DEFAULT_THREADS = 6
+        private const val MAX_MODEL_THREADS = 4
         private const val ANSWER_TOKENS = 128
         private const val MAX_AGENT_STEPS = 4
         private val GENERATION_STOP_MARKERS = listOf("\nuser:", "\nUser:", "\nassistant:", "\nAssistant:", "\nHuman:")
