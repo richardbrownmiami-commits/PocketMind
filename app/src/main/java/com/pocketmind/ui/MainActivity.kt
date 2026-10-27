@@ -1,5 +1,7 @@
 package com.pocketmind.ui
 
+import android.app.Activity
+import android.content.Intent
 import android.os.Bundle
 import android.view.Menu
 import android.view.MenuItem
@@ -12,6 +14,7 @@ import com.google.android.material.transition.MaterialFadeThrough
 import com.pocketmind.R
 import com.pocketmind.memory.AppDatabase
 import com.pocketmind.memory.clearMemory
+import com.pocketmind.tools.AppLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -22,9 +25,11 @@ import kotlinx.coroutines.withContext
 class MainActivity : AppCompatActivity() {
     private val uiScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var bottomNavigation: BottomNavigationView
+    private val exportLogRequest = 4101
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppLog.info(this, "ACTIVITY_CREATE", "savedState=${savedInstanceState != null}")
         setContentView(R.layout.activity_main)
 
         val toolbar = findViewById<MaterialToolbar>(R.id.toolbar)
@@ -39,6 +44,16 @@ class MainActivity : AppCompatActivity() {
         }
         bottomNavigation.setOnItemSelectedListener { item -> showTab(item.itemId) }
         supportFragmentManager.addOnBackStackChangedListener { syncSelectedTab() }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        AppLog.info(this, "ACTIVITY_START")
+    }
+
+    override fun onStop() {
+        AppLog.info(this, "ACTIVITY_STOP")
+        super.onStop()
     }
 
     private fun showTab(itemId: Int): Boolean {
@@ -61,6 +76,7 @@ class MainActivity : AppCompatActivity() {
         current?.returnTransition = MaterialFadeThrough().apply { duration = TRANSITION_DURATION_MS }
         fragment.enterTransition = MaterialFadeThrough().apply { duration = TRANSITION_DURATION_MS }
         fragment.reenterTransition = MaterialFadeThrough().apply { duration = TRANSITION_DURATION_MS }
+        AppLog.info(this, "NAVIGATE", "destination=$destination")
         supportFragmentManager.beginTransaction()
             .setReorderingAllowed(true)
             .replace(R.id.fragment_container, fragment, destination)
@@ -96,11 +112,40 @@ class MainActivity : AppCompatActivity() {
                 .show()
             true
         }
+        R.id.menu_export_logs -> {
+            exportLogs()
+            true
+        }
         R.id.menu_clear_memory -> {
             MemoryFragment.confirmClearMemory(this) { clearMemoryFromToolbar() }
             true
         }
         else -> super.onOptionsItemSelected(item)
+    }
+
+    private fun exportLogs() {
+        AppLog.info(this, "LOG_EXPORT_REQUEST")
+        startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TITLE, "pocketmind-diagnostics.log")
+        }, exportLogRequest)
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != exportLogRequest || resultCode != Activity.RESULT_OK || data?.data == null) return
+        val uri = data.data ?: return
+        uiScope.launch(Dispatchers.IO) {
+            try {
+                contentResolver.openOutputStream(uri)?.use { output ->
+                    output.write(AppLog.exportText(this@MainActivity).toByteArray(Charsets.UTF_8))
+                } ?: error("Could not open destination")
+                AppLog.info(this@MainActivity, "LOG_EXPORT_SUCCESS")
+            } catch (e: Exception) {
+                AppLog.error(this@MainActivity, "LOG_EXPORT_FAILED", e)
+            }
+        }
     }
 
     private fun clearMemoryFromToolbar() {
@@ -115,6 +160,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        AppLog.info(this, "ACTIVITY_DESTROY")
         uiScope.cancel()
         super.onDestroy()
     }
