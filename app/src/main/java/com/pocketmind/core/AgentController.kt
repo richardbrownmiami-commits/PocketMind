@@ -502,8 +502,11 @@ class AgentController(context: Context) : Closeable {
         tools.forEach { spec ->
             append(spec.id).append(": ").append(spec.description)
             append("; args=").append(spec.args.joinToString { arg ->
-                "${arg.name}:${arg.type.name}${if (arg.required) " required" else " optional"}" +
-                    "${if (arg.description.isBlank()) \"\" else \" (${arg.description})\"}"
+                buildString {
+                    append(arg.name).append(':').append(arg.type.name)
+                    append(if (arg.required) " required" else " optional")
+                    if (arg.description.isNotBlank()) append(" (").append(arg.description).append(')')
+                }
             }).append('\n')
         }
         append("User request: ").append(question).append("\nJSON:")
