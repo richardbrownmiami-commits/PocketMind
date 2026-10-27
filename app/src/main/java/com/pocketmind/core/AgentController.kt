@@ -386,7 +386,7 @@ class AgentController(context: Context) : Closeable {
                     .append(" [").append(result.status.name).append("]: ")
                     .append(result.message.take(160)).append('\n')
             }
-            append("Available local tools:\n")
+            append("Available tools:\n")
             tools.forEach { spec ->
                 append(spec.id).append(": ").append(spec.description.take(70))
                 append("; args=").append(spec.args.joinToString { arg ->
