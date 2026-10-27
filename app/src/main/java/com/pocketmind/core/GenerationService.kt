@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.pocketmind.R
+import com.pocketmind.tools.AppLog
 
 class GenerationService : Service() {
     companion object {
@@ -20,18 +21,26 @@ class GenerationService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        AppLog.info(this, "GENERATION_SERVICE_CREATE")
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel(CHANNEL, "On-device generation", NotificationManager.IMPORTANCE_LOW))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        AppLog.info(this, "GENERATION_SERVICE_START", "action=${intent?.action ?: "none"} startId=$startId")
         if (intent?.action == ACTION_STOP) {
+            AppLog.info(this, "GENERATION_SERVICE_STOP_REQUEST")
             stopForeground(true)
             stopSelf(startId)
             return START_NOT_STICKY
         }
         startForeground(NOTIFICATION_ID, notification())
         return START_NOT_STICKY
+    }
+
+    override fun onDestroy() {
+        AppLog.info(this, "GENERATION_SERVICE_DESTROY")
+        super.onDestroy()
     }
 
     private fun notification(): Notification = NotificationCompat.Builder(this, CHANNEL)
