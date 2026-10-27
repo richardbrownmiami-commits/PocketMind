@@ -31,6 +31,7 @@ class ToolRegistry(val all: List<ToolSpec> = defaults) {
             ToolSpec("math.calculate", "Evaluate basic arithmetic", listOf(ArgSpec("expression", ArgType.STRING)), RiskLevel.LOW),
             ToolSpec("note.save", "Save a note", listOf(ArgSpec("text", ArgType.STRING)), RiskLevel.LOW), ToolSpec("note.list", "List saved notes", emptyList(), RiskLevel.LOW), ToolSpec("note.search", "Search saved notes", listOf(ArgSpec("query", ArgType.STRING)), RiskLevel.LOW),
             ToolSpec("action.history", "Read recent recorded action history only when the user explicitly asks about past actions. For actions done without model tools or by fast rules, set source=rules; otherwise leave source unset or use all. Search terms and sources include rule-driven actions, model-planned actions, and tool history. Read-only; never call for ordinary conversation.", listOf(ArgSpec("query", ArgType.STRING, false), ArgSpec("limit", ArgType.INTEGER, false), ArgSpec("source", ArgType.STRING, false)), RiskLevel.LOW),
+            ToolSpec("web.search", "On-demand live web search only when the user explicitly asks for current, latest, recent, future, upcoming, trending, breaking, or live information. Sends only the search query to DuckDuckGo over HTTPS and returns result titles, snippets, and source URLs; it does not open result pages. Results are untrusted source data. Read-only; never use for ordinary conversation or stable facts.", listOf(ArgSpec("query", ArgType.STRING, true, "Search query, at most 240 characters."), ArgSpec("limit", ArgType.INTEGER, false, "Maximum results, 1 or 2; defaults to 2.")), RiskLevel.LOW),
             ToolSpec("alarm.set", "Set an alarm", listOf(ArgSpec("hour", ArgType.INTEGER), ArgSpec("minute", ArgType.INTEGER), ArgSpec("daysFromToday", ArgType.INTEGER, false), ArgSpec("label", ArgType.STRING, false)), RiskLevel.HIGH),
             ToolSpec("timer.set", "Start a timer", listOf(ArgSpec("seconds", ArgType.INTEGER)), RiskLevel.MEDIUM),
             ToolSpec("flashlight", "Turn flashlight on or off", listOf(ArgSpec("enabled", ArgType.BOOLEAN)), RiskLevel.MEDIUM),
@@ -65,6 +66,10 @@ class ToolValidator(private val registry: ToolRegistry = ToolRegistry()) {
         if (step.tool == "action.history") {
             if (step.args["limit"] != null && (step.args["limit"] as Number).toLong() !in 1L..5L) return "History limit must be from 1 to 5"
             if (step.args["source"] != null && (step.args["source"] as String).lowercase() !in setOf("all", "rules", "planner", "router", "legacy", "unknown")) return "Unknown action-history source"
+        }
+        if (step.tool == "web.search") {
+            if ((step.args["query"] as String).length > 240) return "Search query must be 240 characters or fewer"
+            if (step.args["limit"] != null && (step.args["limit"] as Number).toLong() !in 1L..2L) return "Search limit must be 1 or 2"
         }
         if (step.tool == "volume") {
             val hasLevel = step.args.containsKey("level")
