@@ -258,7 +258,7 @@ class AgentController(context: Context) : Closeable {
         val userId = messages.append("user", raw)
         indexRecall(userId, raw)
 
-        val plan = buildPlan(resolved, actionRequest, explicitHistoryRequest)
+        val plan = buildPlan(resolved, actionRequest, explicitHistoryRequest, explicitLiveSearchRequest)
         if (plan != null) {
             val execution = if (explicitHistoryRequest) {
                 executeValidatedPlan(plan, raw, "planner")
@@ -520,7 +520,8 @@ class AgentController(context: Context) : Closeable {
     private fun buildPlan(
         question: String,
         actionRequest: Boolean,
-        historyIntent: Boolean
+        historyIntent: Boolean,
+        liveSearchIntent: Boolean
     ): List<PlanStep>? {
         val relevantTools = if (historyIntent) {
             listOfNotNull(registry.get("action.history"))
@@ -528,6 +529,15 @@ class AgentController(context: Context) : Closeable {
             relevantToolsForRequest(question)
         }
         if (relevantTools.isEmpty() || !actionRequest) return null
+        if (liveSearchIntent && !historyIntent) {
+            val query = question.trim()
+                .replace(Regex("""(?i)^\s*(?:please\s+)?(?:can you\s+|could you\s+|would you\s+)?(?:search|find|look up|look for)\s+(?:the\s+)?(?:web|internet|online)(?:\s+for)?\s*"""), "")
+                .replace(Regex("""(?i)^\s*(?:please\s+)?(?:use|do)\s+(?:the\s+)?(?:web|internet|online)\s+search(?:\s+for)?\s*"""), "")
+                .replace(Regex("""(?i)^\s*(?:the\s+)?(?:web|internet|online)\s+search(?:\s+for)?\s*"""), "")
+                .trim().take(240).ifBlank { question.trim().take(240) }
+            val direct = PlanStep("web.search", linkedMapOf("query" to query, "limit" to 2L))
+            return if (validator.validate(direct) == null && relevantTools.any { it.id == direct.tool }) listOf(direct) else null
+        }
         val planText = generateOrNull(plannerPrompt(question, relevantTools), 160, ACTION_GRAMMAR, {}) ?: return null
         val parsed = try { PlannerJson.parse(planText) } catch (_: Exception) { return null }
         return parsed.takeIf {
