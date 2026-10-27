@@ -25,6 +25,7 @@ internal object PublicApiClient {
         }.sortedByDescending { it.second }.take(3)
         val found = mutableListOf<String>()
         for ((provider, _) in matches) {
+            if (!provider.matches(Regex("[A-Za-z0-9.-]{1,255}"))) continue
             val connection = try { open("https://api.apis.guru/v2/$provider.json") } catch (_: Exception) { continue }
             val body = try { readBounded(connection, 250000) } catch (_: Exception) { "" } finally { connection.disconnect() }
             val apis = try { JSONObject(body).optJSONObject(provider) } catch (_: Exception) { null } ?: continue
