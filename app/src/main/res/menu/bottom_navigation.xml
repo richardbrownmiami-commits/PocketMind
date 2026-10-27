@@ -9,6 +9,10 @@
         android:icon="@drawable/ic_storage"
         android:title="@string/nav_models" />
     <item
+        android:id="@+id/nav_rwkv"
+        android:icon="@drawable/ic_auto_awesome"
+        android:title="@string/nav_rwkv" />
+    <item
         android:id="@+id/nav_memory"
         android:icon="@drawable/ic_auto_awesome"
         android:title="@string/nav_memory" />
