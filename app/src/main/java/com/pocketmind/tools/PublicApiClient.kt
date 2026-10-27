@@ -23,13 +23,18 @@ internal object PublicApiClient {
             "news" to setOf("newsapi.org", "thenewsapi.com"),
             "books" to setOf("openlibrary.org", "googleapis.com")
         )
-        val terms = baseTerms + baseTerms.flatMap { aliases[it].orEmpty() }
+        val terms: Set<String> = buildSet {
+            addAll(baseTerms)
+            baseTerms.forEach { term -> addAll(aliases[term].orEmpty()) }
+        }
         val providersConnection = open("https://api.apis.guru/v2/providers.json")
         val providersText = try { readBounded(providersConnection, 250000) } finally { providersConnection.disconnect() }
         val providers = JSONObject(providersText).optJSONArray("data") ?: throw IOException("Unexpected API catalog response.")
         val matches = (0 until providers.length()).map { providers.getString(it) }.mapNotNull { provider ->
             val tokens = provider.lowercase(Locale.ROOT).split(Regex("[^a-z0-9]+")).toSet()
-            val score = terms.sumOf { term -> if (term in tokens) 4 else if (tokens.any { it.contains(term) || term.contains(it) }) 1 else 0 }
+            val score: Int = terms.fold(0) { total, term ->
+                total + if (term in tokens) 4 else if (tokens.any { token -> token.contains(term) || term.contains(token) }) 1 else 0
+            }
             if (score > 0) provider to score else null
         }.sortedByDescending { it.second }.take(3)
         val found = mutableListOf<String>()
