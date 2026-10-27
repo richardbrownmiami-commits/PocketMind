@@ -60,6 +60,10 @@ internal object PublicApiClient {
             host.matches(Regex("[0-9.]+")) || host.contains(":") || urlText.length > 2048) {
             throw IOException("Only public HTTPS URLs on the standard port are allowed.")
         }
+        val sensitiveNames = setOf("key", "api_key", "apikey", "token", "access_token", "authorization", "password", "secret", "client_secret")
+        if (uri.queryParameterNames.any { it.lowercase(Locale.ROOT) in sensitiveNames }) {
+            throw IOException("URLs containing credential-like query parameters are blocked.")
+        }
         val addresses = try { InetAddress.getAllByName(host) } catch (_: Exception) {
             throw IOException("The API hostname could not be resolved.")
         }
