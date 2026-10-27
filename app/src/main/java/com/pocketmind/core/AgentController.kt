@@ -346,7 +346,7 @@ class AgentController(context: Context) : Closeable {
      * decision receives the verified outcome. Failures and Android hand-offs stop the loop so
      * a partially completed action is never blindly repeated.
      */
-    private fun executeOfflineAgentPlan(
+    private fun executeAgentPlan(
         question: String,
         initialPlan: List<PlanStep>,
         originalRequest: String
@@ -373,7 +373,7 @@ class AgentController(context: Context) : Closeable {
         return ActionExecution(results)
     }
 
-    private fun buildNextOfflineAgentStep(
+    private fun buildNextAgentStep(
         question: String,
         tools: List<ToolSpec>,
         executed: List<PlanStep>,
