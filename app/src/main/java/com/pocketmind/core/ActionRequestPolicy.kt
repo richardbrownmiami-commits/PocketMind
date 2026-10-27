@@ -23,8 +23,13 @@ internal object ActionRequestPolicy {
         return clean.isNotEmpty() && historyRequestPatterns.any { it.matches(clean) }
     }
 
-    /** Live search is now handled by the normal autonomous tool planner rather than being short-circuited. */
-    fun isLiveSearchRequest(text: String): Boolean = false
+    /** Detect explicit web-search commands; execution still goes through the registered tool runtime. */
+    fun isLiveSearchRequest(text: String): Boolean {
+        val clean = text.trim()
+        return clean.isNotEmpty() && Regex(
+            """(?i)\\b(?:search|find|look up|look for)\\b.*\\b(?:web|internet|online)\\b|\\b(?:web|internet|online)\\b.*\\b(?:search|find|look up|look for)\\b"""
+        ).containsMatchIn(clean)
+    }
 
     fun looksLikeAction(text: String, ruleMatched: Boolean = false): Boolean {
         if (ruleMatched) return false
