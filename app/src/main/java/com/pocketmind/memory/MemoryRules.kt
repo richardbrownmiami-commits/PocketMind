@@ -13,10 +13,22 @@ object MemoryRules {
     private val factQuestion = Regex("(?i)\\b(?:what do you know about me|what do you remember about me|what is my|what's my|what are my|what do i like|what do i prefer|do you remember my|my name|my preferences|my likes|do i (?:like|prefer|have)|how old am i|where do i live|who am i|(?:what|which|who|where|when|how)\\b.{0,36}\\b(?:my|mine|our|i (?:like|prefer|have|am|live|work|want))\\b)\\b")
     private val recallQuestion = Regex("(?i)\\b(?:earlier|previous(?:ly)?|last time|before|what did i (?:say|ask|tell you)|what have i (?:said|asked|told you)|did i (?:say|ask|tell you)|we (?:discussed|talked about)|in our (?:chat|conversation)|from our (?:chat|conversation)|(?:when |do you remember )?i mentioned|you said|i said)\\b")
 
-    /** Use explicit question intent to avoid searching long-term SQLite memory for every turn. */
+    /**
+     * Fact lookup stays intent-driven, but recall runs for substantive chat questions too.
+     * This lets the existing SQLite/FTS recall surface relevant context without requiring
+     * users to say "remember", "earlier", or "last time" explicitly.
+     */
     fun memoryNeeds(question: String): MemoryNeeds {
-        val asksAboutFacts = factQuestion.containsMatchIn(question)
-        return MemoryNeeds(facts = asksAboutFacts, recall = recallQuestion.containsMatchIn(question))
+        val clean = question.trim()
+        val asksAboutFacts = factQuestion.containsMatchIn(clean)
+        val trivial = clean.length < 12 || Regex(
+            "(?i)^(hi|hello|hey|thanks|thank you|ok|okay|bye|good morning|good night)[!. ]*$"
+        ).matches(clean)
+        val isActionLike = Regex(
+            "(?i)^\\s*(search|open|launch|call|play|set|remind|timer|alarm|navigate|find|weather|calculate|send|message|turn on|turn off)\\b"
+        ).containsMatchIn(clean)
+        val recallNeeded = recallQuestion.containsMatchIn(clean) || (!trivial && !isActionLike)
+        return MemoryNeeds(facts = asksAboutFacts, recall = recallNeeded)
     }
 
     fun extractFact(text: String): FactCandidate? {
