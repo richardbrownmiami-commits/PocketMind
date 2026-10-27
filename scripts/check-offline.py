@@ -31,6 +31,8 @@ if "HttpsURLConnection" not in api or "instanceFollowRedirects = false" not in a
     raise SystemExit("Network contract violated: API client must use HTTPS without redirects")
 if "fun get(urlText: String)" not in api or "readBounded" not in api:
     raise SystemExit("Network contract violated: API GET must be bounded")
+if "isLoopbackAddress" not in api or "isSiteLocalAddress" not in api or "queryParameterNames" not in api:
+    raise SystemExit("Network contract violated: API GET must reject private addresses and credential-like query parameters")
 if runtime.count('"web.search" -> webSearch(step)') != 1 or runtime.count("LiveWebSearch.search(") != 1:
     raise SystemExit("Network contract violated: search transport must be called only by web.search")
 if runtime.count('"api.discover" -> apiDiscover(step)') != 1 or runtime.count('"api.get" -> apiGet(step)') != 1:
