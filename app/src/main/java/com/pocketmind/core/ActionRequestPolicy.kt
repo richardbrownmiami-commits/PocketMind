@@ -27,7 +27,7 @@ internal object ActionRequestPolicy {
     fun isLiveSearchRequest(text: String): Boolean {
         val clean = text.trim()
         return clean.isNotEmpty() && Regex(
-            """(?i)\\b(?:search|find|look up|look for)\\b.*\\b(?:web|internet|online)\\b|\\b(?:web|internet|online)\\b.*\\b(?:search|find|look up|look for)\\b"""
+            """(?i)\b(?:search|find|look up|look for)\b.*\b(?:web|internet|online)\b|\b(?:web|internet|online)\b.*\b(?:search|find|look up|look for)\b"""
         ).containsMatchIn(clean)
     }
 
