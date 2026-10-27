@@ -29,10 +29,8 @@ if "HttpsURLConnection" not in search or "instanceFollowRedirects = false" not i
     raise SystemExit("Network contract violated: web search must use HTTPS without redirects")
 if "HttpsURLConnection" not in api or "instanceFollowRedirects = false" not in api:
     raise SystemExit("Network contract violated: API client must use HTTPS without redirects")
-if "fun get(urlText: String)" not in api or "MAX" in api:
-    # The client must expose only its bounded public-HTTPS GET and catalog discovery.
-    if "fun get(urlText: String)" not in api or "readBounded" not in api:
-        raise SystemExit("Network contract violated: API GET must be bounded")
+if "fun get(urlText: String)" not in api or "readBounded" not in api:
+    raise SystemExit("Network contract violated: API GET must be bounded")
 if runtime.count('"web.search" -> webSearch(step)') != 1 or runtime.count("LiveWebSearch.search(") != 1:
     raise SystemExit("Network contract violated: search transport must be called only by web.search")
 if runtime.count('"api.discover" -> apiDiscover(step)') != 1 or runtime.count('"api.get" -> apiGet(step)') != 1:
