@@ -76,8 +76,8 @@ internal object PublicApiClient {
             val status = connection.responseCode
             if (status !in 200..299) throw IOException("The API returned HTTP $status.")
             val type = connection.contentType?.substringBefore(';')?.trim()?.lowercase(Locale.ROOT).orEmpty()
-            if (type != "application/json" && type != "text/plain" && !type.endsWith("+json")) {
-                throw IOException("Only JSON and plain-text API responses are supported.")
+            if (type != "application/json" && type != "text/plain" && type != "application/yaml" && type != "text/yaml" && type != "application/x-yaml" && !type.endsWith("+json")) {
+                throw IOException("Only JSON, YAML, and plain-text API responses are supported.")
             }
             readBounded(connection, 32768)
         } finally { connection.disconnect() }
