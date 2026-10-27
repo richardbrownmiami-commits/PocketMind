@@ -11,12 +11,10 @@ class PocketMindApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         AppLog.init(this)
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             AppLog.error(this, "UNCAUGHT_EXCEPTION", throwable, "thread=${thread.name}")
-            val previous = Thread.getDefaultUncaughtExceptionHandler()
-            if (previous != null && previous !== Thread.currentThread().uncaughtExceptionHandler) {
-                previous.uncaughtException(thread, throwable)
-            }
+            previous?.uncaughtException(thread, throwable)
         }
     }
 
