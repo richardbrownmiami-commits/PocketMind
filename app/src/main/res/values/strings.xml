@@ -3,6 +3,7 @@
     <string name="nav_chat">Chat</string>
     <string name="nav_models">Models</string>
     <string name="nav_memory">Memory</string>
+    <string name="nav_rwkv">RWKV</string>
     <string name="menu_about">About</string>
     <string name="menu_clear_memory">Clear memory</string>
     <string name="about_title">About PocketMind</string>
@@ -50,4 +51,17 @@
     <string name="action_verified">Verified</string>
     <string name="action_handed_off">Handed off</string>
     <string name="action_failed">Failed</string>
+    <string name="rwkv_title">RWKV Engine</string>
+    <string name="rwkv_subtitle">Dedicated RWKV-6/RWKV-7 GGUF page · ARMv7a CPU</string>
+    <string name="rwkv_info">RWKV models are loaded as their own engine page. This build targets 32-bit armeabi-v7a on Android 11/API 30.</string>
+    <string name="rwkv_import">Import RWKV GGUF</string>
+    <string name="rwkv_importing">Importing RWKV model…</string>
+    <string name="rwkv_imported">RWKV model ready: %1$s</string>
+    <string name="rwkv_wrong_model">That file is not an RWKV GGUF model.</string>
+    <string name="rwkv_import_failed">RWKV model import failed.</string>
+    <string name="rwkv_select_first">Select an RWKV GGUF model first.</string>
+    <string name="rwkv_loading">Loading RWKV model…</string>
+    <string name="rwkv_no_model">No RWKV model selected.</string>
+    <string name="rwkv_wrong_selected">Selected file is not an RWKV GGUF model: %1$s</string>
+    <string name="rwkv_selected">Selected RWKV model: %1$s</string>
 </resources>

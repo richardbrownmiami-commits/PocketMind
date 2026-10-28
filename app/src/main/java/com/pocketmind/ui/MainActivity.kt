@@ -45,6 +45,7 @@ class MainActivity : AppCompatActivity() {
         val destination = when (itemId) {
             R.id.nav_chat -> TAG_CHAT
             R.id.nav_models -> TAG_MODELS
+            R.id.nav_rwkv -> TAG_RWKV
             R.id.nav_memory -> TAG_MEMORY
             else -> return false
         }
@@ -53,6 +54,7 @@ class MainActivity : AppCompatActivity() {
         val fragment = when (destination) {
             TAG_CHAT -> ChatFragment()
             TAG_MODELS -> ModelsFragment()
+            TAG_RWKV -> RwkvFragment()
             else -> MemoryFragment()
         }
         current?.exitTransition = MaterialFadeThrough().apply { duration = TRANSITION_DURATION_MS }
@@ -73,6 +75,7 @@ class MainActivity : AppCompatActivity() {
         val selectedId = when (current?.tag) {
             TAG_CHAT -> R.id.nav_chat
             TAG_MODELS -> R.id.nav_models
+            TAG_RWKV -> R.id.nav_rwkv
             TAG_MEMORY -> R.id.nav_memory
             else -> return
         }
@@ -120,6 +123,7 @@ class MainActivity : AppCompatActivity() {
         private const val TRANSITION_DURATION_MS = 250L
         private const val TAG_CHAT = "chat"
         private const val TAG_MODELS = "models"
+        private const val TAG_RWKV = "rwkv"
         private const val TAG_MEMORY = "memory"
     }
 }
