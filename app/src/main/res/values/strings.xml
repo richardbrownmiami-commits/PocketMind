@@ -5,6 +5,7 @@
     <string name="nav_memory">Memory</string>
     <string name="nav_rwkv">RWKV</string>
     <string name="menu_about">About</string>
+    <string name="menu_export_logs">Export diagnostics log</string>
     <string name="menu_clear_memory">Clear memory</string>
     <string name="about_title">About PocketMind</string>
     <string name="about_message">PocketMind is a private assistant that runs compatible language models on this device. Imported models and saved memory are stored in the app.</string>
