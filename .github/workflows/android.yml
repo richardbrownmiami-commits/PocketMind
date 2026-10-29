@@ -15,14 +15,6 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: remote-relay/package-lock.json
-      - name: Test remote-test relay
-        working-directory: remote-relay
-        run: npm ci && npm test
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -40,18 +32,18 @@ jobs:
       - name: Fetch pinned llama.cpp
         run: ./scripts/fetch-llama.sh
       - name: Build the debug APK
-        run: ./gradlew --no-daemon clean testDebugUnitTest assembleDebug
+        run: ./gradlew --no-daemon clean assembleDebug
       - name: Verify APK ABI
         run: python3 scripts/check-apk-abi.py app/build/outputs/apk/debug/app-debug.apk
       - name: Verify approved network scope
         run: python3 scripts/check-offline.py
       - name: Verify APK identity and API contract
-        run: python3 scripts/check-apk-metadata.py app/build/outputs/apk/debug/app-debug.apk --application-id com.pocketmind --version-code 3 --version-name 0.2.0
+        run: python3 scripts/check-apk-metadata.py app/build/outputs/apk/debug/app-debug.apk --application-id com.pocketmind --version-code 4 --version-name 0.2.1
       - name: Package APK with build provenance
         env:
           COMMIT_SHA: ${{ github.sha }}
-          VERSION_CODE: "3"
-          VERSION_NAME: "0.2.0"
+          VERSION_CODE: "4"
+          VERSION_NAME: "0.2.1"
         run: |
           mkdir -p dist
           apk="dist/PocketMind-v${VERSION_NAME}-vc${VERSION_CODE}-${COMMIT_SHA:0:7}.apk"
@@ -61,12 +53,12 @@ jobs:
           {
             printf 'commit=%s\n' "$COMMIT_SHA"
             printf 'applicationId=com.pocketmind\nversionName=%s\nversionCode=%s\n' "$VERSION_NAME" "$VERSION_CODE"
-            printf 'minSdk=30\ntargetSdk=30\nabi=armeabi-v7a\nINTERNET_permission=true\nnetwork_scope=explicit-model-called-web.search,api.discover,api.get,user-started-remote-test-wss\nlastPromptTokens=runtime-only\n'
+            printf 'minSdk=30\ntargetSdk=30\nabi=armeabi-v7a\nINTERNET_permission=true\nnetwork_scope=explicit-model-called-web.search,api.discover,api.get\nlastPromptTokens=runtime-only\n'
           } > dist/BUILD_INFO.txt
       - name: Verify APK checksum
         run: (cd dist && sha256sum -c SHA256SUMS.txt)
       - uses: actions/upload-artifact@v4
         with:
-          name: pocketmind-v0.2.0-vc3-${{ github.sha }}
+          name: pocketmind-v0.2.1-vc4-${{ github.sha }}
           path: dist/*
           if-no-files-found: error

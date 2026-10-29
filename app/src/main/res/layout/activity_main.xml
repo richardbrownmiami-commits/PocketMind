@@ -27,34 +27,6 @@
                 app:titleTextColor="@color/primary" />
         </com.google.android.material.appbar.AppBarLayout>
 
-        <LinearLayout
-            android:id="@+id/remote_session_banner"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:background="@color/error"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:paddingStart="12dp"
-            android:paddingEnd="8dp"
-            android:visibility="gone">
-            <TextView
-                android:id="@+id/remote_session_banner_status"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="@string/remote_active_banner_default"
-                android:textColor="@color/background"
-                android:textStyle="bold" />
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/remote_session_stop_button"
-                android:layout_width="wrap_content"
-                android:layout_height="40dp"
-                android:minHeight="40dp"
-                android:text="@string/remote_stop"
-                android:textColor="@color/on_background"
-                app:backgroundTint="@color/background" />
-        </LinearLayout>
-
         <androidx.fragment.app.FragmentContainerView
             android:id="@+id/fragment_container"
             android:layout_width="match_parent"

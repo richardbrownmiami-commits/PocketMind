@@ -64,7 +64,7 @@ class ToolRuntime(
         if (usesScratchDatabase && databaseDelegate.isInitialized()) database.close()
     }
 
-    fun execute(steps: List<PlanStep>, originalRequest: String, source: String = "unknown", remoteSessionRequest: Boolean = false): List<ActionResult> {
+    fun execute(steps: List<PlanStep>, originalRequest: String, source: String = "unknown"): List<ActionResult> {
         if (steps.size > 8) {
             return listOf(finish(PlanStep("action.plan", emptyMap()), originalRequest, ActionStatus.FAILED, "Plan exceeds 8 steps", source))
         }
@@ -72,12 +72,12 @@ class ToolRuntime(
             val invalid = validator.validate(step)
             if (invalid != null) return@map finish(step, originalRequest, ActionStatus.FAILED, invalid, source)
             if (registry.get(step.tool) == null) return@map finish(step, originalRequest, ActionStatus.FAILED, "Unknown tool", source)
-            var result = perform(step, originalRequest, remoteSessionRequest)
+            var result = perform(step, originalRequest)
             var attempts = 1
             val maximumAttempts = ToolExecutionRetryPolicy.maximumAttempts(step)
             while (result.status == ActionStatus.FAILED && attempts < maximumAttempts) {
                 attempts++
-                result = perform(step, originalRequest, remoteSessionRequest)
+                result = perform(step, originalRequest)
             }
             finish(step, originalRequest, result.status, result.message, source)
         }
@@ -96,10 +96,7 @@ class ToolRuntime(
         }
     }
 
-    private fun perform(step: PlanStep, originalRequest: String, remoteSessionRequest: Boolean): ActionResult {
-        if (!com.pocketmind.remote.RemoteTestToolPolicy.allows(remoteSessionRequest, com.pocketmind.remote.RemoteSessionManager.active)) {
-            return failed(step, "Remote test session ended before this action ran; no action was taken.")
-        }
+    private fun perform(step: PlanStep, originalRequest: String): ActionResult {
         val a = step.args
         return try {
             when (step.tool) {

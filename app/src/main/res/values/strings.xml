@@ -65,25 +65,4 @@
     <string name="rwkv_no_model">No RWKV model selected.</string>
     <string name="rwkv_wrong_selected">Selected file is not an RWKV GGUF model: %1$s</string>
     <string name="rwkv_selected">Selected RWKV model: %1$s</string>
-    <string name="remote_start">Start remote test</string>
-    <string name="remote_stop">Stop remote test</string>
-    <string name="remote_start_title">Start a remote test?</string>
-    <string name="remote_disclosure">Only after you start, PocketMind sends a reduced-size image of its own app window and accepts taps, swipes, and text inside PocketMind. Chat requests can use PocketMind\'s normal features, including alarms, volume, flashlight, and launching apps. These actions can affect your device. When another app comes to the foreground, sharing pauses, the viewer is blanked, and remote controls are blocked until PocketMind returns; any action result appears in PocketMind chat. Stop blocks not-yet-run actions from this session. Screen lock or Stop ends the session. A visible banner and notification stay active. The relay operator can see the live PocketMind window and send in-app requests; use only a relay you trust. No other app\'s screen is captured or controlled.</string>
-    <string name="remote_relay_hint">Relay HTTPS address (https://…)</string>
-    <string name="remote_invalid_relay_title">Relay address needed</string>
-    <string name="remote_invalid_relay">Enter the root HTTPS address of a trusted PocketMind relay. The app requires a valid HTTPS/WSS connection and connects only after you explicitly start a session.</string>
-    <string name="remote_pairing_title">Session started</string>
-    <string name="remote_pairing_message">Open %2$s in a browser and enter this one-session code:\n\n%1$s\n\nShare the code only with your trusted tester. Switching apps pauses sharing and blocks control, so you can send the code and return here. Stop, screen lock, closing the app task, disconnect, or the 60-minute limit ends the session. The relay forwards live images and control events in memory; its operator can inspect them.</string>
-    <string name="remote_copy_code">Copy code</string>
-    <string name="remote_connecting">Connecting to relay</string>
-    <string name="remote_stopped">Remote session stopped</string>
-    <string name="remote_start_failed_title">Could not start remote test</string>
-    <string name="remote_start_failed">The remote session could not be started.</string>
-    <string name="remote_active_banner_default">REMOTE TEST ACTIVE — PocketMind window shared</string>
-    <string name="remote_active_banner">REMOTE TEST ACTIVE · %1$s</string>
-    <string name="remote_toolbar_active">Remote test active</string>
-    <string name="remote_notification_title">PocketMind remote test is active</string>
-    <string name="remote_notification_text">PocketMind only · %1$s</string>
-    <string name="remote_notification_channel">Remote test session</string>
-    <string name="remote_notification_channel_description">Visible notification while PocketMind is sharing its app window for a user-started remote test.</string>
 </resources>
