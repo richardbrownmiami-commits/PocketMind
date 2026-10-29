@@ -145,10 +145,10 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
             }, STREAM_UPDATE_MS)
         }
 
-        val remoteTestRestricted = com.pocketmind.remote.RemoteSessionManager.active
+        val remoteSessionRequest = com.pocketmind.remote.RemoteSessionManager.active
         viewScope?.launch {
             try {
-                val reply = controller.send(text, remoteTestRestricted) { chunk ->
+                val reply = controller.send(text, remoteSessionRequest) { chunk ->
                     if (firstToken.compareAndSet(false, true)) handler.post { stopThinking() }
                     synchronized(streamLock) { streamed.append(chunk) }
                     scheduleStreamUpdate()

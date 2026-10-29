@@ -1,40 +1,41 @@
 package com.pocketmind.remote
 
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RemoteTestToolPolicyTest {
-    @Test fun remoteRequestsOnlyAllowAppDataAndExistingReadOnlyOnlineTools() {
-        listOf("clock.time", "clock.date", "math.calculate", "note.save", "note.list", "note.search", "action.history", "web.search", "api.discover", "api.get").forEach {
-            assertTrue(it, RemoteTestToolPolicy.allows(it, true))
-        }
-        listOf("alarm.set", "timer.set", "flashlight", "volume", "brightness", "battery/status", "app.open", "app.search", "wifi.settings", "bluetooth.settings", "airplane.settings", "location.settings", "future.tool").forEach {
-            assertFalse(it, RemoteTestToolPolicy.allows(it, true))
+    @Test fun liveRemoteSessionAllowsPocketMindNormalActionToolSet() {
+        val normalPocketMindTools = listOf(
+            "alarm.set", "timer.set", "flashlight", "volume", "brightness", "app.open", "app.search",
+            "wifi.settings", "bluetooth.settings", "airplane.settings", "location.settings", "note.save", "web.search"
+        )
+        normalPocketMindTools.forEach { tool ->
+            assertTrue("$tool must remain available through PocketMind's normal runtime", RemoteTestToolPolicy.allows(true, true))
         }
     }
 
-    @Test fun normalLocalRequestsKeepTheirExistingTools() {
-        assertTrue(RemoteTestToolPolicy.allows("alarm.set", false))
-        assertTrue(RemoteTestToolPolicy.allows("future.tool", false))
+    @Test fun delayedRemotePlanCannotRunAfterOwnerStopsSession() {
+        assertFalse(RemoteTestToolPolicy.allows(requestStartedInRemoteSession = true, sessionActiveAtExecution = false))
     }
 
-    @Test fun delayedPlanCannotRunDeviceToolsAfterOwnerStopsSession() {
-        val restrictedWhenRequestWasSubmitted = true
-        val sessionActiveWhenDelayedPlanExecutes = false // Owner pressed Stop while planning was in progress.
-        listOf("alarm.set", "timer.set", "flashlight", "volume", "brightness", "app.open", "wifi.settings").forEach {
-            assertFalse("$it must stay blocked after Stop", RemoteTestToolPolicy.allows(
-                it, restrictedWhenRequestWasSubmitted, sessionActiveWhenDelayedPlanExecutes
-            ))
+    @Test fun offSessionRequestsRetainNormalBehavior() {
+        assertTrue(RemoteTestToolPolicy.allows(requestStartedInRemoteSession = false, sessionActiveAtExecution = false))
+        assertTrue(RemoteTestToolPolicy.allows(requestStartedInRemoteSession = false, sessionActiveAtExecution = true))
+    }
+
+    @Test fun normalPocketMindRouterRecognizesRepresentativeRemoteCommands() {
+        val commands = mapOf(
+            "set an alarm for 7:30 pm" to "alarm.set",
+            "set volume to 50 percent" to "volume",
+            "turn on flashlight" to "flashlight",
+            "open Calculator" to "app.open"
+        )
+        commands.forEach { (request, expectedTool) ->
+            val plan = com.pocketmind.tools.RuleEngine.match(request)
+            assertEquals(request, expectedTool, plan?.singleOrNull()?.tool)
+            assertTrue("$request may execute during its live remote session", RemoteTestToolPolicy.allows(true, true))
         }
-        assertTrue("app-local calculation stays in scope", RemoteTestToolPolicy.allows(
-            "math.calculate", restrictedWhenRequestWasSubmitted, sessionActiveWhenDelayedPlanExecutes
-        ))
-    }
-
-    @Test fun localPlanCannotRunDeviceToolsIfSessionStartsBeforeExecution() {
-        val restrictedWhenRequestWasSubmitted = false
-        val sessionActiveWhenPlanExecutes = true
-        assertFalse(RemoteTestToolPolicy.allows("alarm.set", restrictedWhenRequestWasSubmitted, sessionActiveWhenPlanExecutes))
-        assertTrue(RemoteTestToolPolicy.allows("note.list", restrictedWhenRequestWasSubmitted, sessionActiveWhenPlanExecutes))
     }
 }

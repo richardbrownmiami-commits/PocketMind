@@ -30,6 +30,7 @@ runtime = (java / "ToolRuntime.kt").read_text(encoding="utf-8")
 models = (java / "ToolModels.kt").read_text(encoding="utf-8")
 service = (root / "java/com/pocketmind/remote/RemoteSessionService.kt").read_text(encoding="utf-8")
 manager = (root / "java/com/pocketmind/remote/RemoteSessionManager.kt").read_text(encoding="utf-8")
+session_policy = (root / "java/com/pocketmind/remote/RemoteTestToolPolicy.kt").read_text(encoding="utf-8")
 activity = (root / "java/com/pocketmind/ui/MainActivity.kt").read_text(encoding="utf-8")
 if "HttpsURLConnection" not in search or "instanceFollowRedirects = false" not in search:
     raise SystemExit("Network contract violated: web search must use HTTPS without redirects")
@@ -59,8 +60,12 @@ if "decor.dispatchTouchEvent(event)" not in activity or "canAcceptRemoteInput()"
     raise SystemExit("Remote-test control must be dispatched only to PocketMind's own views")
 if "Intent.ACTION_SCREEN_OFF" not in service or "!appForeground" not in manager or "!ready || !visible" not in client_source:
     raise SystemExit("Remote-test transport must pause frames/control outside foreground and stop on screen lock")
-if "RemoteTestToolPolicy.allows" not in runtime or "remoteTestRestricted" not in runtime:
-    raise SystemExit("Remote-test requests must not invoke device/system actions")
+if "RemoteTestToolPolicy.allows(remoteSessionRequest" not in runtime or "RemoteSessionManager.active" not in runtime:
+    raise SystemExit("Remote-test requests must use normal tools only while their session is active")
+if "!requestStartedInRemoteSession || sessionActiveAtExecution" not in session_policy:
+    raise SystemExit("Remote-test plans must retain request origin and be rejected after Stop")
+if "RemoteTestToolPolicy.allows(true, true)" not in (root / "../test/java/com/pocketmind/remote/RemoteTestToolPolicyTest.kt").resolve().read_text(encoding="utf-8"):
+    raise SystemExit("Remote-test contract must cover normal PocketMind action parity")
 android_ns = "{http://schemas.android.com/apk/res/android}"
 manifest_root = ET.fromstring(manifest)
 remote_services = [node for node in manifest_root.find("application") if node.attrib.get(android_ns + "name") == ".remote.RemoteSessionService"]

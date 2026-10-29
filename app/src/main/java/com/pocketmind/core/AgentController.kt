@@ -138,12 +138,12 @@ class AgentController(context: Context) : Closeable {
     @Volatile var lastGenerationMs: Long = 0
         private set
     private var contextSize = 512
-    private data class PendingClarification(val tool: String, val request: String, val label: String? = null, val remoteRestricted: Boolean = false)
+    private data class PendingClarification(val tool: String, val request: String, val label: String? = null, val remoteSessionRequest: Boolean = false)
     private var pendingClarification: PendingClarification? = null
     private val closed = AtomicBoolean(false)
-    private val remoteRestriction = ThreadLocal.withInitial { false }
+    private val remoteSessionRequestContext = ThreadLocal.withInitial { false }
 
-    suspend fun send(text: String, remoteTestRestricted: Boolean = com.pocketmind.remote.RemoteSessionManager.active, onToken: (String) -> Unit = {}): AgentReply = withContext(dispatcher + remoteRestriction.asContextElement(remoteTestRestricted)) {
+    suspend fun send(text: String, remoteSessionRequest: Boolean = false, onToken: (String) -> Unit = {}): AgentReply = withContext(dispatcher + remoteSessionRequestContext.asContextElement(remoteSessionRequest)) {
         ensureOpen()
         val raw = text.trim()
         if (raw.isEmpty()) return@withContext AgentReply("Please enter a message.")
@@ -156,7 +156,7 @@ class AgentController(context: Context) : Closeable {
                 val userId = messages.append("user", raw)
                 indexRecall(userId, raw)
                 val originalRequest = "${clarificationIntent.request} $raw".trim()
-                val execution = executeValidatedPlan(listOf(followUpPlan), originalRequest, "rules", clarificationIntent.remoteRestricted)
+                val execution = executeValidatedPlan(listOf(followUpPlan), originalRequest, "rules", clarificationIntent.remoteSessionRequest)
                 val answer = actionReply(execution.results)
                 val assistantId = messages.append("assistant", answer)
                 indexRecall(assistantId, answer)
@@ -234,7 +234,7 @@ class AgentController(context: Context) : Closeable {
             val clarificationTarget = RuleEngine.clarificationTarget(raw)
             if (clarificationTarget != null) {
                 val label = Regex("(?i)\\b(?:called|labelled|labeled)\\s+(.+?)\\s*$").find(raw)?.groupValues?.get(1)?.take(80)
-                pendingClarification = PendingClarification(clarificationTarget, raw, label, remoteRestriction.get() == true)
+                pendingClarification = PendingClarification(clarificationTarget, raw, label, remoteSessionRequestContext.get() == true)
             }
             val answer = generateActionReply(
                 "The user asked to do an action but did not give enough detail. Hint: $clarification. Ask naturally in one short sentence.",
@@ -426,7 +426,7 @@ class AgentController(context: Context) : Closeable {
     private fun stepSignature(step: PlanStep): String =
         step.tool + ":" + step.args.toSortedMap().entries.joinToString("|") { "${it.key}=${it.value}" }
 
-    private fun executeValidatedPlan(steps: List<PlanStep>, originalRequest: String, source: String, remoteRestricted: Boolean = false): ActionExecution {
+    private fun executeValidatedPlan(steps: List<PlanStep>, originalRequest: String, source: String, remoteSessionRequest: Boolean = false): ActionExecution {
         val invalid = validator.validatePlan(steps)
         if (invalid != null) {
             steps.forEach { step ->
@@ -435,7 +435,7 @@ class AgentController(context: Context) : Closeable {
             return ActionExecution(steps.map { ActionResult(it.tool, ActionStatus.FAILED, invalid, it.args) })
         }
         val runtime = ToolRuntime(app, registry, validator, sharedDatabase = db)
-        return try { ActionExecution(runtime.execute(steps, originalRequest, source, remoteRestricted || (remoteRestriction.get() == true))) } finally { runtime.close() }
+        return try { ActionExecution(runtime.execute(steps, originalRequest, source, remoteSessionRequest || (remoteSessionRequestContext.get() == true))) } finally { runtime.close() }
     }
 
     private fun actionHistoryReply(question: String, results: List<ActionResult>, onToken: (String) -> Unit): String {
