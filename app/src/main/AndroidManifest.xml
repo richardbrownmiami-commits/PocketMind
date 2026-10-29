@@ -40,6 +40,10 @@
             android:name=".core.GenerationService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+        <service
+            android:name=".remote.RemoteSessionService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
         <activity android:name=".ui.MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

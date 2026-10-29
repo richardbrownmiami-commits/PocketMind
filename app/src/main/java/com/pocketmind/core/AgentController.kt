@@ -24,6 +24,7 @@ import com.pocketmind.tools.ToolSpec
 import com.pocketmind.tools.ToolValidator
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.asContextElement
 import kotlinx.coroutines.withContext
 import java.io.Closeable
 import java.util.Locale
@@ -137,11 +138,12 @@ class AgentController(context: Context) : Closeable {
     @Volatile var lastGenerationMs: Long = 0
         private set
     private var contextSize = 512
-    private data class PendingClarification(val tool: String, val request: String, val label: String? = null)
+    private data class PendingClarification(val tool: String, val request: String, val label: String? = null, val remoteRestricted: Boolean = false)
     private var pendingClarification: PendingClarification? = null
     private val closed = AtomicBoolean(false)
+    private val remoteRestriction = ThreadLocal.withInitial { false }
 
-    suspend fun send(text: String, onToken: (String) -> Unit = {}): AgentReply = withContext(dispatcher) {
+    suspend fun send(text: String, remoteTestRestricted: Boolean = com.pocketmind.remote.RemoteSessionManager.active, onToken: (String) -> Unit = {}): AgentReply = withContext(dispatcher + remoteRestriction.asContextElement(remoteTestRestricted)) {
         ensureOpen()
         val raw = text.trim()
         if (raw.isEmpty()) return@withContext AgentReply("Please enter a message.")
@@ -154,7 +156,7 @@ class AgentController(context: Context) : Closeable {
                 val userId = messages.append("user", raw)
                 indexRecall(userId, raw)
                 val originalRequest = "${clarificationIntent.request} $raw".trim()
-                val execution = executeValidatedPlan(listOf(followUpPlan), originalRequest, "rules")
+                val execution = executeValidatedPlan(listOf(followUpPlan), originalRequest, "rules", clarificationIntent.remoteRestricted)
                 val answer = actionReply(execution.results)
                 val assistantId = messages.append("assistant", answer)
                 indexRecall(assistantId, answer)
@@ -232,7 +234,7 @@ class AgentController(context: Context) : Closeable {
             val clarificationTarget = RuleEngine.clarificationTarget(raw)
             if (clarificationTarget != null) {
                 val label = Regex("(?i)\\b(?:called|labelled|labeled)\\s+(.+?)\\s*$").find(raw)?.groupValues?.get(1)?.take(80)
-                pendingClarification = PendingClarification(clarificationTarget, raw, label)
+                pendingClarification = PendingClarification(clarificationTarget, raw, label, remoteRestriction.get() == true)
             }
             val answer = generateActionReply(
                 "The user asked to do an action but did not give enough detail. Hint: $clarification. Ask naturally in one short sentence.",
@@ -424,7 +426,7 @@ class AgentController(context: Context) : Closeable {
     private fun stepSignature(step: PlanStep): String =
         step.tool + ":" + step.args.toSortedMap().entries.joinToString("|") { "${it.key}=${it.value}" }
 
-    private fun executeValidatedPlan(steps: List<PlanStep>, originalRequest: String, source: String): ActionExecution {
+    private fun executeValidatedPlan(steps: List<PlanStep>, originalRequest: String, source: String, remoteRestricted: Boolean = false): ActionExecution {
         val invalid = validator.validatePlan(steps)
         if (invalid != null) {
             steps.forEach { step ->
@@ -433,7 +435,7 @@ class AgentController(context: Context) : Closeable {
             return ActionExecution(steps.map { ActionResult(it.tool, ActionStatus.FAILED, invalid, it.args) })
         }
         val runtime = ToolRuntime(app, registry, validator, sharedDatabase = db)
-        return try { ActionExecution(runtime.execute(steps, originalRequest, source)) } finally { runtime.close() }
+        return try { ActionExecution(runtime.execute(steps, originalRequest, source, remoteRestricted || (remoteRestriction.get() == true))) } finally { runtime.close() }
     }
 
     private fun actionHistoryReply(question: String, results: List<ActionResult>, onToken: (String) -> Unit): String {

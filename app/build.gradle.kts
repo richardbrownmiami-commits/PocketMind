@@ -3,6 +3,12 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val remoteTestRelayPrefill = providers.gradleProperty("pocketmind.remoteRelayUrl").orElse("").get()
+require(remoteTestRelayPrefill.isEmpty() || (remoteTestRelayPrefill.length <= 200 &&
+    Regex("^https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?/?$").matches(remoteTestRelayPrefill))) {
+    "pocketmind.remoteRelayUrl must be an HTTPS root URL without credentials, query, or fragment"
+}
+
 android {
     namespace = "com.pocketmind"
     compileSdk = 35
@@ -14,8 +20,9 @@ android {
         applicationId = "com.pocketmind"
         minSdk = 30
         targetSdk = 30
-        versionCode = 2
-        versionName = "0.1.1"
+        versionCode = 3
+        versionName = "0.2.0"
+        buildConfigField("String", "DEFAULT_REMOTE_RELAY_URL", "\"$remoteTestRelayPrefill\"")
         ndk { abiFilters += "armeabi-v7a" }
         externalNativeBuild {
             cmake {
@@ -57,4 +64,6 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.recyclerview:recyclerview:1.3.2")
     implementation("com.github.requery:sqlite-android:3.49.0")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    testImplementation("junit:junit:4.13.2")
 }
