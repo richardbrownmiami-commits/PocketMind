@@ -90,9 +90,8 @@ class ToolRuntime(
             val safeArgs = step.args.entries.joinToString(prefix = "{", postfix = "}") { "${it.key}=${it.value}" }.take(500)
             actions.record(originalRequest, step.tool, safeArgs, status.name, message, source)
             return result
-        } catch (e: Exception) {
-            val reason = e.message?.take(120) ?: "database write failed"
-            return result.copy(message = "$message SQL action log could not be saved: $reason.")
+        } catch (_: Exception) {
+            return result.copy(message = "$message The action could not be saved to local history.")
         }
     }
 
@@ -132,8 +131,8 @@ class ToolRuntime(
                 "wifi.settings", "bluetooth.settings", "airplane.settings", "location.settings" -> openSettings(step)
                 else -> failed(step, "Unsupported tool.")
             }
-        } catch (e: Exception) {
-            failed(step, e.message?.take(200) ?: "The action failed.")
+        } catch (_: Exception) {
+            failed(step, "The action could not be completed. Please try again.")
         }
     }
 
@@ -162,7 +161,7 @@ class ToolRuntime(
                 "planner" -> "planner"
                 else -> record.source
             }
-            "$whenRun · $origin · ${record.tool} · ${record.outcome}: ${record.message.take(120)}"
+            "$whenRun · $origin · You asked: '${record.request.take(120)}' → ${record.tool} · ${record.outcome}: ${record.message.take(120)}"
         }
         return verified(step, "Recent recorded actions (newest first):\n$lines")
     }
@@ -259,16 +258,19 @@ class ToolRuntime(
         val target = LocalDate.now().plusDays((dayOffset ?: 0).toLong()).atTime(hour, minute)
             .let { if (dayOffset == null && !it.isAfter(LocalDateTime.now())) it.plusDays(1) else it }
         val expectedMillis = target.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
-        val observed = (app.getSystemService(Context.ALARM_SERVICE) as AlarmManager).nextAlarmClock?.triggerTime
-        return if (observed != null && kotlin.math.abs(observed - expectedMillis) <= 90_000L) {
-            val day = when {
-                dayOffset == 0 -> " today"
-                target.toLocalDate().isAfter(LocalDate.now()) -> " tomorrow"
-                else -> ""
-            }
-            verified(step, "Alarm for $displayTime$day verified by the system.")
+        val observed = runCatching {
+            (app.getSystemService(Context.ALARM_SERVICE) as AlarmManager).nextAlarmClock?.triggerTime
+        }.getOrNull()
+        val day = when {
+            dayOffset == 0 -> " today"
+            target.toLocalDate().isAfter(LocalDate.now()) -> " tomorrow"
+            else -> ""
+        }
+        val matchingNextAlarm = observed != null && kotlin.math.abs(observed - expectedMillis) <= 90_000L
+        return if (matchingNextAlarm) {
+            handoff(step, "The Clock app received the request for $displayTime$day, and Android reports a matching next alarm. Android does not identify which app created it, so this request is not independently verified.")
         } else {
-            handoff(step, "The Clock app received the request for $displayTime; Android did not expose a matching next alarm for verification.")
+            handoff(step, "The Clock app received the request for $displayTime$day, but Android did not expose a matching next alarm. This request is not independently verified.")
         }
     }
 

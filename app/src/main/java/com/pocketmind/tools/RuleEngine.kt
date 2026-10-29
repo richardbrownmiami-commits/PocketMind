@@ -172,7 +172,7 @@ object RuleEngine {
     }
 
     fun clarification(text: String): String? = when (clarificationTarget(text)) {
-        "alarm.set" -> "What time should I set the alarm for? Please include minutes and AM/PM, for example 6:30 pm."
+        "alarm.set" -> "What time should I set the alarm for? Please use hh:mm AM/PM; an unambiguous 24-hour time is also accepted."
         "volume" -> "What media volume level should I use, from 0 to 100 percent?"
         else -> null
     }

@@ -155,7 +155,7 @@ class AgentController(context: Context) : Closeable {
                 indexRecall(userId, raw)
                 val originalRequest = "${clarificationIntent.request} $raw".trim()
                 val execution = executeValidatedPlan(listOf(followUpPlan), originalRequest, "rules")
-                val answer = actionReply(execution.results)
+                val answer = actionExecutionReply(originalRequest, execution.results, onToken)
                 val assistantId = messages.append("assistant", answer)
                 indexRecall(assistantId, answer)
                 return@withContext AgentReply(answer, execution.results)
@@ -163,7 +163,7 @@ class AgentController(context: Context) : Closeable {
             if (RuleEngine.looksLikeClarificationFollowUp(clarificationIntent.tool, raw)) {
                 messages.append("user", raw)
                 val answer = if (clarificationIntent.tool == "alarm.set") {
-                    "That time is invalid or incomplete. Please reply with a valid time including AM/PM, for example 6:30 pm."
+                    "That time is invalid or incomplete. Please use hh:mm AM/PM, or an unambiguous 24-hour time."
                 } else {
                     "That volume level is invalid. Please reply with a number from 0 to 100 percent."
                 }
@@ -220,7 +220,7 @@ class AgentController(context: Context) : Closeable {
                 return@withContext AgentReply(answer)
             }
             val execution = executeValidatedPlan(rule, raw, "rules")
-            val answer = actionReply(execution.results)
+            val answer = actionExecutionReply(raw, execution.results, onToken)
             val assistantId = messages.append("assistant", answer)
             indexRecall(assistantId, answer)
             updateTopic(raw, execution.results)
@@ -277,7 +277,7 @@ class AgentController(context: Context) : Closeable {
                     execution.results.joinToString("\n") { renderSingleAction(it) },
                     112
                 )
-                else -> actionReply(execution.results)
+                else -> actionExecutionReply(raw, execution.results, onToken)
             }
             val assistantId = messages.append("assistant", answer)
             indexRecall(assistantId, answer)
@@ -338,7 +338,7 @@ class AgentController(context: Context) : Closeable {
     fun isModelLoaded(path: String): Boolean = loadedPath == path
     fun stop() { try { engine.cancel() } catch (_: Throwable) { } }
     fun status(): String = if (loadedPath == null) "No model loaded" else
-        "Model loaded · context $contextSize · in $lastPromptTokens · out $lastOutputTokens · ${String.format(Locale.US, "%.1f", lastGenerationMs / 1000.0)}s"
+        "Model loaded · context $contextSize · last prompt $lastPromptTokens tokens"
 
     private data class ActionExecution(val results: List<ActionResult>)
 
@@ -448,18 +448,22 @@ class AgentController(context: Context) : Closeable {
         )
     }
 
-    private fun actionReply(results: List<ActionResult>): String =
-        if (results.isEmpty()) "No action was taken."
-        else results.joinToString("\n") { result ->
+    private fun actionExecutionReply(request: String, results: List<ActionResult>, onToken: (String) -> Unit): String {
+        val summary = if (results.isEmpty()) "No action was taken." else results.joinToString("\n") { result ->
             when (result.status) {
-                ActionStatus.VERIFIED, ActionStatus.HANDED_OFF -> result.message
-                ActionStatus.FAILED -> if (result.message.contains("SQL action log could not be saved")) {
-                    "I couldn't complete that action. ${result.message}"
-                } else {
-                    "I couldn't complete that action."
-                }
+                ActionStatus.VERIFIED -> "Action '${result.tool}' succeeded: ${result.message.take(240)}"
+                ActionStatus.HANDED_OFF -> "Action '${result.tool}' was handed to Android: ${result.message.take(240)}"
+                ActionStatus.FAILED -> "Action '${result.tool}' failed: ${result.message.take(180)}"
             }
         }
+        val hint = "The user asked: ${request.take(240)}\nAction result summary:\n$summary\n" +
+            "Write one short, natural reply. Confirm only an observed success and describe Android handoffs as unconfirmed. " +
+            "Do not mention internal tool names or technical errors."
+        return generateActionReply(hint, results, onToken, actionReply(results))
+    }
+
+    private fun actionReply(results: List<ActionResult>): String =
+        if (results.isEmpty()) "No action was taken." else results.joinToString("\n") { renderSingleAction(it) }
 
     private fun generateActionReply(
         systemHint: String,
@@ -489,7 +493,7 @@ class AgentController(context: Context) : Closeable {
     private fun renderSingleAction(result: ActionResult): String = when (result.status) {
         ActionStatus.VERIFIED -> result.message
         ActionStatus.HANDED_OFF -> result.message
-        ActionStatus.FAILED -> "${result.tool} failed: ${result.message}"
+        ActionStatus.FAILED -> "I couldn't complete that action. ${result.message}"
     }
 
     private fun recordPlanFailure(request: String, message: String, source: String) {
@@ -648,7 +652,9 @@ class AgentController(context: Context) : Closeable {
             tool ::= [a-zA-Z0-9_./-]+
             object ::= "{}" | "{" pair ("," pair)* "}"
             pair ::= "\"" [a-zA-Z_]+ "\":" value
-            value ::= "\"" [^"\\]* "\"" | "-"? [0-9]+ ("." [0-9]+)? | "true" | "false"
+            value ::= string | number | "true" | "false"
+            string ::= "\"" ([^"\\\x7F\x00-\x1F] | "\\" (["\\bfnrt] | "u" [0-9a-fA-F]{4}))* "\""
+            number ::= "-"? [0-9]+ ("." [0-9]+)?
         """.trimIndent()
     }
 }
