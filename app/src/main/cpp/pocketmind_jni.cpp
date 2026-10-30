@@ -110,6 +110,35 @@ void deliver(JNIEnv *env, jobject sink, jmethodID method, const std::string &pie
     }
 }
 
+size_t completeUtf8PrefixLength(const std::string &bytes) {
+    size_t i = 0;
+    while (i < bytes.size()) {
+        const uint8_t lead = static_cast<uint8_t>(bytes[i]);
+        if (lead < 0x80) {
+            ++i;
+            continue;
+        }
+        size_t length = 1;
+        if (lead >= 0xC2 && lead <= 0xDF) length = 2;
+        else if (lead >= 0xE0 && lead <= 0xEF) length = 3;
+        else if (lead >= 0xF0 && lead <= 0xF4) length = 4;
+        else {
+            ++i;
+            continue;
+        }
+        if (i + length > bytes.size()) break;
+        bool valid = true;
+        for (size_t j = 1; j < length; ++j) {
+            if ((static_cast<uint8_t>(bytes[i + j]) & 0xC0) != 0x80) {
+                valid = false;
+                break;
+            }
+        }
+        i += valid ? length : 1;
+    }
+    return i;
+}
+
 bool decodeOne(llama_batch &batch, llama_token token, llama_pos position) {
     batch.n_tokens = 1;
     batch.token[0] = token;
@@ -216,6 +245,7 @@ Java_com_pocketmind_engine_LlamaEngine_nativeGenerate(JNIEnv *env, jobject, jstr
     }
 
     std::string generated;
+    std::string pendingUtf8;
     const int basePosition = static_cast<int>(tokens.size());
     for (int i = 0; i < generationLimit && !g_cancelled.load() && !env->ExceptionCheck(); ++i) {
         const llama_token token = llama_sampler_sample(sampler, g_context, -1);
@@ -229,7 +259,12 @@ Java_com_pocketmind_engine_LlamaEngine_nativeGenerate(JNIEnv *env, jobject, jstr
         if (nPiece > 0) {
             std::string bytes(piece.data(), static_cast<size_t>(nPiece));
             generated += bytes;
-            deliver(env, sink, onToken, bytes);
+            pendingUtf8 += bytes;
+            const size_t completeLength = completeUtf8PrefixLength(pendingUtf8);
+            if (completeLength > 0) {
+                deliver(env, sink, onToken, pendingUtf8.substr(0, completeLength));
+                pendingUtf8.erase(0, completeLength);
+            }
         }
         if (env->ExceptionCheck()) break;
         if (!decodeOne(batch, token, basePosition + i)) {
@@ -237,6 +272,7 @@ Java_com_pocketmind_engine_LlamaEngine_nativeGenerate(JNIEnv *env, jobject, jstr
             break;
         }
     }
+    if (!pendingUtf8.empty()) deliver(env, sink, onToken, pendingUtf8);
     llama_sampler_free(sampler);
     llama_batch_free(batch);
     if (env->ExceptionCheck()) return nullptr;
