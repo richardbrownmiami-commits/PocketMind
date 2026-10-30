@@ -152,9 +152,9 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
                     synchronized(streamLock) { streamed.append(chunk) }
                     scheduleStreamUpdate()
                 }
-                adapter?.update(answerRow, reply.text, reply.actions)
+                adapter?.update(answerRow, reply.text, reply.actions, time = System.currentTimeMillis())
             } catch (e: Exception) {
-                adapter?.update(answerRow, "PocketMind could not finish: ${e.message ?: "unexpected error"}")
+                adapter?.update(answerRow, "PocketMind could not finish: ${e.message ?: "unexpected error"}", time = System.currentTimeMillis())
             } finally {
                 stopThinking()
                 generationActive = false

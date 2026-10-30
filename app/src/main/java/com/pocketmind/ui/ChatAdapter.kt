@@ -23,7 +23,7 @@ class ChatAdapter : RecyclerView.Adapter<ChatAdapter.Holder>() {
     data class Line(
         val role: String,
         var text: String,
-        val time: Long = System.currentTimeMillis(),
+        var time: Long = System.currentTimeMillis(),
         var actions: List<ActionResult> = emptyList(),
         var thinking: Boolean = false,
         var animateOnInsert: Boolean = false
@@ -148,11 +148,12 @@ class ChatAdapter : RecyclerView.Adapter<ChatAdapter.Holder>() {
         update(index, lines[index].text + chunk)
     }
 
-    fun update(index: Int, text: String, actions: List<ActionResult> = emptyList(), thinking: Boolean = false) {
+    fun update(index: Int, text: String, actions: List<ActionResult> = emptyList(), thinking: Boolean = false, time: Long? = null) {
         if (index !in lines.indices) return
         lines[index].text = text
         lines[index].actions = actions
         lines[index].thinking = thinking
+        if (time != null) lines[index].time = time
         notifyItemChanged(index)
     }
 
