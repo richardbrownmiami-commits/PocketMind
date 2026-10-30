@@ -42,11 +42,11 @@ private fun SQLiteDatabase.forEach(sql: String, args: Array<String>? = null, blo
 class MessageStore(private val db: SQLiteDatabase) {
     constructor(helper: AppDatabase) : this(helper.writableDatabase)
 
-    fun append(role: String, content: String): Long {
+    fun append(role: String, content: String, timeMillis: Long = System.currentTimeMillis()): Long {
         require(role == "user" || role == "assistant" || role == "system")
         val clean = content.take(20_000)
         val id = db.insert("messages", null, ContentValues().apply {
-            put("role", role); put("content", clean); put("time", System.currentTimeMillis())
+            put("role", role); put("content", clean); put("time", timeMillis)
         })
         if (id > 0) db.execSQL("INSERT INTO messages_fts(message_id,role,content) VALUES(?,?,?)", arrayOf(id, role, clean))
         return id

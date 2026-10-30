@@ -102,11 +102,11 @@ int tokenize(const llama_vocab *vocab, const std::string &text, std::vector<llam
     return count;
 }
 
-void deliver(JNIEnv *env, jobject sink, jmethodID method, const std::string &piece) {
-    if (piece.empty() || env->ExceptionCheck()) return;
+void deliver(JNIEnv *env, jobject sink, jmethodID method, const std::string &piece, int outputTokens) {
+    if (env->ExceptionCheck()) return;
     jstring chunk = newJavaString(env, piece);
     if (chunk != nullptr) {
-        env->CallVoidMethod(sink, method, chunk);
+        env->CallVoidMethod(sink, method, chunk, static_cast<jint>(outputTokens));
         env->DeleteLocalRef(chunk);
     }
 }
@@ -290,7 +290,7 @@ Java_com_pocketmind_engine_LlamaEngine_nativeGenerate(JNIEnv *env, jobject, jstr
     if (!ok) { llama_batch_free(batch); throwJava(env, "Prompt evaluation failed"); return nullptr; }
 
     jclass sinkClass = env->GetObjectClass(sink);
-    jmethodID onToken = sinkClass == nullptr ? nullptr : env->GetMethodID(sinkClass, "onToken", "(Ljava/lang/String;)V");
+    jmethodID onToken = sinkClass == nullptr ? nullptr : env->GetMethodID(sinkClass, "onToken", "(Ljava/lang/String;I)V");
     if (onToken == nullptr) { llama_batch_free(batch); throwJava(env, "Token callback is unavailable"); return nullptr; }
     llama_sampler *sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
     if (sampler == nullptr) { llama_batch_free(batch); throwJava(env, "Could not initialize sampler"); return nullptr; }
@@ -308,33 +308,37 @@ Java_com_pocketmind_engine_LlamaEngine_nativeGenerate(JNIEnv *env, jobject, jstr
 
     std::string generated;
     std::string pendingUtf8;
+    int generatedTokenCount = 0;
     const int basePosition = static_cast<int>(tokens.size());
     for (int i = 0; i < generationLimit && !g_cancelled.load() && !env->ExceptionCheck(); ++i) {
         const llama_token token = llama_sampler_sample(sampler, g_context, -1);
         if (llama_vocab_is_eog(vocab, token)) break;
+        ++generatedTokenCount;
         std::vector<char> piece(256);
         int nPiece = llama_token_to_piece(vocab, token, piece.data(), static_cast<int32_t>(piece.size()), 0, true);
         if (nPiece < 0) {
             piece.resize(static_cast<size_t>(-nPiece));
             nPiece = llama_token_to_piece(vocab, token, piece.data(), static_cast<int32_t>(piece.size()), 0, true);
         }
+        std::string callbackText;
         if (nPiece > 0) {
             std::string bytes(piece.data(), static_cast<size_t>(nPiece));
             generated += bytes;
             pendingUtf8 += bytes;
             const size_t completeLength = completeUtf8PrefixLength(pendingUtf8);
             if (completeLength > 0) {
-                deliver(env, sink, onToken, pendingUtf8.substr(0, completeLength));
+                callbackText = pendingUtf8.substr(0, completeLength);
                 pendingUtf8.erase(0, completeLength);
             }
         }
+        deliver(env, sink, onToken, callbackText, generatedTokenCount);
         if (env->ExceptionCheck()) break;
         if (!decodeOne(batch, token, basePosition + i)) {
             if (!g_cancelled.load()) throwJava(env, "Token evaluation failed");
             break;
         }
     }
-    if (!pendingUtf8.empty()) deliver(env, sink, onToken, pendingUtf8);
+    if (!pendingUtf8.empty()) deliver(env, sink, onToken, pendingUtf8, generatedTokenCount);
     llama_sampler_free(sampler);
     llama_batch_free(batch);
     if (env->ExceptionCheck()) return nullptr;

@@ -42,6 +42,7 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
     private var adapter: ChatAdapter? = null
     private var viewScope: CoroutineScope? = null
     private var thinkingJob: Job? = null
+    private var statusJob: Job? = null
     private var thinkingIndex = 0
     private var generationActive = false
     private val handler = Handler(Looper.getMainLooper())
@@ -110,10 +111,11 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
         if (text.isEmpty() || !activeViews.send.isEnabled || generationActive) return
         activeViews.input.setText("")
         adapter?.add("user", text, animateOnInsert = true)
-        val answerRow = adapter?.add("assistant", "", thinking = true) ?: return
+        val answerRow = adapter?.add("assistant", "", thinking = true, timestampFinalized = false) ?: return
         scrollToBottom()
         generationActive = true
         updateSendButton(true)
+        startStatusUpdates()
         startThinking(answerRow)
         val context = requireContext()
         try {
@@ -152,11 +154,12 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
                     synchronized(streamLock) { streamed.append(chunk) }
                     scheduleStreamUpdate()
                 }
-                adapter?.update(answerRow, reply.text, reply.actions, time = System.currentTimeMillis())
+                adapter?.update(answerRow, reply.text, reply.actions, time = reply.completedAtMillis)
             } catch (e: Exception) {
                 adapter?.update(answerRow, "PocketMind could not finish: ${e.message ?: "unexpected error"}", time = System.currentTimeMillis())
             } finally {
                 stopThinking()
+                stopStatusUpdates()
                 generationActive = false
                 views?.let {
                     it.status.text = controller.status()
@@ -202,6 +205,21 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
         thinkingJob = null
     }
 
+    private fun startStatusUpdates() {
+        statusJob?.cancel()
+        statusJob = viewScope?.launch {
+            while (generationActive && views != null) {
+                views?.status?.text = controller.status()
+                delay(250)
+            }
+        }
+    }
+
+    private fun stopStatusUpdates() {
+        statusJob?.cancel()
+        statusJob = null
+    }
+
     private fun scrollToBottom() {
         val activeViews = views ?: return
         val count = adapter?.itemCount ?: 0
@@ -222,6 +240,7 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
             generationActive = false
         }
         stopThinking()
+        stopStatusUpdates()
         viewScope?.cancel()
         viewScope = null
         views = null

@@ -6,6 +6,7 @@ import com.pocketmind.tools.LiveSearchPlannerContext
 class LlamaEngine {
     companion object {
         init { System.loadLibrary("pocketmind") }
+        private val CUSTOM_TEMPLATE_PLACEHOLDER = Regex("\\{\\{(system|user)\\}\\}")
     }
 
     fun load(path: String, nCtx: Int = 512, nBatch: Int = 256, nUbatch: Int = 128, threads: Int = 2) {
@@ -15,8 +16,21 @@ class LlamaEngine {
         nativeLoad(path, nCtx, nBatch, nUbatch, threads)
     }
 
-    fun formatPrompt(system: String, user: String, template: PromptTemplate): String =
-        nativeFormatPrompt(system, user, template.id)
+    fun formatPrompt(system: String, user: String, settings: InferenceSettings): String {
+        if (settings.promptTemplate != PromptTemplate.CUSTOM) {
+            return nativeFormatPrompt(system, user, settings.promptTemplate.id)
+        }
+        val template = settings.customPromptTemplate
+        require(InferenceSettings.isValidCustomPromptTemplate(template)) {
+            "Custom prompt template must include the {{user}} placeholder and be no longer than ${InferenceSettings.MAX_CUSTOM_PROMPT_TEMPLATE_CHARS} characters"
+        }
+        return CUSTOM_TEMPLATE_PLACEHOLDER.replace(template) { match ->
+            when (match.groupValues[1]) {
+                "system" -> system
+                else -> user
+            }
+        }
+    }
 
     fun generate(
         prompt: String,
@@ -25,6 +39,7 @@ class LlamaEngine {
         temperature: Float = InferenceSettings.DEFAULT_TEMPERATURE,
         topK: Int = InferenceSettings.DEFAULT_TOP_K,
         topP: Float = InferenceSettings.DEFAULT_TOP_P,
+        onOutputTokens: (Int) -> Unit = {},
         onToken: (String) -> Unit = {}
     ): String {
         require(maxTokens in 1..512) { "maxTokens must be between 1 and 512" }
@@ -37,11 +52,12 @@ class LlamaEngine {
         // tool-call JSON envelope; return the validated deterministic plan immediately.
         LiveSearchPlannerContext.takeQuery()?.let { query ->
             val plan = "{\"steps\":[{\"tool\":\"web.search\",\"args\":{\"query\":\"${escapeJson(query)}\",\"limit\":2}}]}"
+            onOutputTokens(try { countTokens(plan) } catch (_: Throwable) { 0 })
             onToken(plan)
             return plan
         }
 
-        return nativeGenerate(prompt, maxTokens, grammar, temperature, topK, topP, TokenSink(onToken))
+        return nativeGenerate(prompt, maxTokens, grammar, temperature, topK, topP, TokenSink(onToken, onOutputTokens))
     }
 
     fun countTokens(text: String): Int = nativeCountTokens(text)
@@ -62,7 +78,15 @@ class LlamaEngine {
         }
     }
 
-    private fun interface TokenSink { fun onToken(chunk: String) }
+    private class TokenSink(
+        private val onToken: (String) -> Unit,
+        private val onOutputTokens: (Int) -> Unit
+    ) {
+        fun onToken(chunk: String, totalOutputTokens: Int) {
+            onOutputTokens(totalOutputTokens)
+            if (chunk.isNotEmpty()) onToken(chunk)
+        }
+    }
 
     private external fun nativeLoad(path: String, nCtx: Int, nBatch: Int, nUbatch: Int, threads: Int)
     private external fun nativeFormatPrompt(system: String, user: String, templateId: Int): String

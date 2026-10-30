@@ -26,6 +26,7 @@ class ChatAdapter : RecyclerView.Adapter<ChatAdapter.Holder>() {
         var time: Long = System.currentTimeMillis(),
         var actions: List<ActionResult> = emptyList(),
         var thinking: Boolean = false,
+        var timestampFinalized: Boolean = true,
         var animateOnInsert: Boolean = false
     )
 
@@ -87,7 +88,7 @@ class ChatAdapter : RecyclerView.Adapter<ChatAdapter.Holder>() {
         }
 
         holder.badge.visibility = if (!isUser && firstInGroup) View.VISIBLE else View.GONE
-        holder.timestamp.visibility = if (firstInGroup) View.VISIBLE else View.GONE
+        holder.timestamp.visibility = if (firstInGroup && line.timestampFinalized) View.VISIBLE else View.GONE
         holder.timestamp.text = DateFormat.getTimeFormat(context).format(Date(line.time))
         (holder.timestamp.layoutParams as LinearLayout.LayoutParams).gravity = if (isUser) Gravity.END else Gravity.START
 
@@ -136,8 +137,20 @@ class ChatAdapter : RecyclerView.Adapter<ChatAdapter.Holder>() {
         super.onViewRecycled(holder)
     }
 
-    fun add(role: String, text: String, thinking: Boolean = false, animateOnInsert: Boolean = false): Int {
-        lines.add(Line(role = role, text = text, thinking = thinking, animateOnInsert = animateOnInsert))
+    fun add(
+        role: String,
+        text: String,
+        thinking: Boolean = false,
+        animateOnInsert: Boolean = false,
+        timestampFinalized: Boolean = true
+    ): Int {
+        lines.add(Line(
+            role = role,
+            text = text,
+            thinking = thinking,
+            timestampFinalized = timestampFinalized,
+            animateOnInsert = animateOnInsert
+        ))
         val index = lines.lastIndex
         notifyItemInserted(index)
         return index
@@ -153,7 +166,10 @@ class ChatAdapter : RecyclerView.Adapter<ChatAdapter.Holder>() {
         lines[index].text = text
         lines[index].actions = actions
         lines[index].thinking = thinking
-        if (time != null) lines[index].time = time
+        if (time != null) {
+            lines[index].time = time
+            lines[index].timestampFinalized = true
+        }
         notifyItemChanged(index)
     }
 
