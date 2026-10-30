@@ -2,6 +2,7 @@ package com.pocketmind.engine
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.pocketmind.tools.AppLog
 import kotlin.math.min
 
 /** Prompt formats supported by the native inference bridge, plus a user-defined format. */
@@ -54,6 +55,7 @@ class InferenceSettingsStore(context: Context) {
         .getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
 
     fun load(): InferenceSettings {
+        AppLog.info("INFERENCE_SETTINGS_LOAD_STARTED")
         val temperature = preferences.getFloat(KEY_TEMPERATURE, InferenceSettings.DEFAULT_TEMPERATURE)
             .takeIf(Float::isFinite)?.coerceIn(MIN_TEMPERATURE, MAX_TEMPERATURE)
             ?: InferenceSettings.DEFAULT_TEMPERATURE
@@ -71,7 +73,7 @@ class InferenceSettingsStore(context: Context) {
             ?.take(InferenceSettings.MAX_CUSTOM_PROMPT_TEMPLATE_CHARS)
             ?.takeIf(InferenceSettings::isValidCustomPromptTemplate)
             ?: InferenceSettings.DEFAULT_CUSTOM_PROMPT_TEMPLATE
-        return InferenceSettings(
+        val settings = InferenceSettings(
             temperature = temperature,
             topK = topK,
             topP = topP,
@@ -80,9 +82,12 @@ class InferenceSettingsStore(context: Context) {
             promptTemplate = promptTemplate,
             customPromptTemplate = customPromptTemplate
         )
+        AppLog.info("INFERENCE_SETTINGS_LOAD_FINISHED", "contextTokens=${settings.contextTokens} cpuThreads=${settings.cpuThreads} temperature=${settings.temperature} topK=${settings.topK} topP=${settings.topP} promptTemplate=${settings.promptTemplate.name}")
+        return settings
     }
 
     fun save(settings: InferenceSettings) {
+        AppLog.info("INFERENCE_SETTINGS_SAVE_STARTED", "contextTokens=${settings.contextTokens} cpuThreads=${settings.cpuThreads} temperature=${settings.temperature} topK=${settings.topK} topP=${settings.topP} promptTemplate=${settings.promptTemplate.name}")
         val customTemplate = settings.customPromptTemplate
             .take(InferenceSettings.MAX_CUSTOM_PROMPT_TEMPLATE_CHARS)
             .takeIf(InferenceSettings::isValidCustomPromptTemplate)
@@ -97,6 +102,7 @@ class InferenceSettingsStore(context: Context) {
             .putInt(KEY_TEMPLATE, settings.promptTemplate.id)
             .putString(KEY_CUSTOM_TEMPLATE, customTemplate)
             .apply()
+        AppLog.info("INFERENCE_SETTINGS_SAVE_QUEUED", "outcome=accepted contextTokens=${settings.contextTokens} cpuThreads=${settings.cpuThreads} promptTemplate=${settings.promptTemplate.name}")
     }
 
     companion object {

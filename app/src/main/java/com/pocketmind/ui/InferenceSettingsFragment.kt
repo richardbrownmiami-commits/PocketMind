@@ -34,6 +34,10 @@ class InferenceSettingsFragment : Fragment(R.layout.fragment_inference_settings)
         temperatureSlider.addOnChangeListener { _, value, _ ->
             temperatureValue.text = String.format(Locale.US, "%.1f", value)
         }
+        temperatureSlider.addOnSliderTouchListener(object : Slider.OnSliderTouchListener {
+            override fun onStartTrackingTouch(slider: Slider) = AppLog.info(requireContext(), "UI_CONTROL_INTERACTION_STARTED", "screen=inference_settings control=temperature_slider")
+            override fun onStopTrackingTouch(slider: Slider) = AppLog.info(requireContext(), "UI_CONTROL_INTERACTION_FINISHED", "screen=inference_settings control=temperature_slider")
+        })
 
         val topKSlider = view.findViewById<Slider>(R.id.top_k_slider).apply {
             valueFrom = InferenceSettingsStore.MIN_TOP_K.toFloat()
@@ -44,6 +48,10 @@ class InferenceSettingsFragment : Fragment(R.layout.fragment_inference_settings)
         val topKValue = view.findViewById<TextView>(R.id.top_k_value)
         topKValue.text = topKSlider.value.toInt().toString()
         topKSlider.addOnChangeListener { _, value, _ -> topKValue.text = value.toInt().toString() }
+        topKSlider.addOnSliderTouchListener(object : Slider.OnSliderTouchListener {
+            override fun onStartTrackingTouch(slider: Slider) = AppLog.info(requireContext(), "UI_CONTROL_INTERACTION_STARTED", "screen=inference_settings control=top_k_slider")
+            override fun onStopTrackingTouch(slider: Slider) = AppLog.info(requireContext(), "UI_CONTROL_INTERACTION_FINISHED", "screen=inference_settings control=top_k_slider")
+        })
 
         val topPSlider = view.findViewById<Slider>(R.id.top_p_slider).apply {
             valueFrom = InferenceSettingsStore.MIN_TOP_P
@@ -56,6 +64,10 @@ class InferenceSettingsFragment : Fragment(R.layout.fragment_inference_settings)
         topPSlider.addOnChangeListener { _, value, _ ->
             topPValue.text = String.format(Locale.US, "%.2f", value)
         }
+        topPSlider.addOnSliderTouchListener(object : Slider.OnSliderTouchListener {
+            override fun onStartTrackingTouch(slider: Slider) = AppLog.info(requireContext(), "UI_CONTROL_INTERACTION_STARTED", "screen=inference_settings control=top_p_slider")
+            override fun onStopTrackingTouch(slider: Slider) = AppLog.info(requireContext(), "UI_CONTROL_INTERACTION_FINISHED", "screen=inference_settings control=top_p_slider")
+        })
 
         val templateOptions = resources.getStringArray(R.array.inference_prompt_templates).toList()
         val templateDropdown = view.findViewById<MaterialAutoCompleteTextView>(R.id.prompt_template_dropdown).apply {
@@ -72,7 +84,10 @@ class InferenceSettingsFragment : Fragment(R.layout.fragment_inference_settings)
             customTemplateContainer.visibility = if (selectedIndex == PromptTemplate.CUSTOM.id) View.VISIBLE else View.GONE
             customTemplateLayout.error = null
         }
-        templateDropdown.setOnItemClickListener { _, _, _, _ -> updateCustomTemplateVisibility() }
+        templateDropdown.setOnItemClickListener { _, _, _, _ ->
+            AppLog.info(requireContext(), "UI_CONTROL_TAPPED", "screen=inference_settings control=prompt_template_dropdown")
+            updateCustomTemplateVisibility()
+        }
         updateCustomTemplateVisibility()
 
         val contextOptions = InferenceSettings.CONTEXT_OPTIONS.map(Int::toString)
@@ -81,18 +96,23 @@ class InferenceSettingsFragment : Fragment(R.layout.fragment_inference_settings)
             setText(saved.contextTokens.toString(), false)
         }
 
+        contextDropdown.setOnItemClickListener { _, _, _, _ -> AppLog.info(requireContext(), "UI_CONTROL_TAPPED", "screen=inference_settings control=context_dropdown") }
+
         val threadOptions = (1..InferenceSettings.availableCpuThreads()).map(Int::toString)
         val cpuThreadsDropdown = view.findViewById<MaterialAutoCompleteTextView>(R.id.cpu_threads_dropdown).apply {
             setAdapter(ArrayAdapter(requireContext(), android.R.layout.simple_dropdown_item_1line, threadOptions))
             setText(saved.cpuThreads.coerceAtMost(threadOptions.size).toString(), false)
         }
+        cpuThreadsDropdown.setOnItemClickListener { _, _, _, _ -> AppLog.info(requireContext(), "UI_CONTROL_TAPPED", "screen=inference_settings control=cpu_threads_dropdown") }
 
         view.findViewById<TextView>(R.id.save_inference_settings).setOnClickListener {
+            AppLog.info(requireContext(), "UI_CONTROL_TAPPED", "screen=inference_settings control=save_settings")
             val templateIndex = templateOptions.indexOf(templateDropdown.text.toString())
                 .takeIf { it >= 0 } ?: saved.promptTemplate.id
             val promptTemplate = PromptTemplate.fromId(templateIndex)
             val customPromptTemplate = customTemplateInput.text?.toString().orEmpty()
             if (promptTemplate == PromptTemplate.CUSTOM && !InferenceSettings.isValidCustomPromptTemplate(customPromptTemplate)) {
+                AppLog.warn(requireContext(), "INFERENCE_SETTINGS_SAVE_REJECTED", "reason=invalid_custom_template")
                 customTemplateLayout.error = getString(R.string.inference_custom_template_invalid)
                 customTemplateInput.requestFocus()
                 return@setOnClickListener
@@ -116,7 +136,7 @@ class InferenceSettingsFragment : Fragment(R.layout.fragment_inference_settings)
             AppLog.info(
                 requireContext(),
                 "INFERENCE_SETTINGS_SAVED",
-                "temperature=${temperatureSlider.value} topK=${topKSlider.value.toInt()} topP=${topPSlider.value} contextTokens=$contextTokens cpuThreads=$cpuThreads template=${promptTemplate.name} customTemplateCharacters=${customPromptTemplate.length}"
+                "outcome=queued temperature=${temperatureSlider.value} topK=${topKSlider.value.toInt()} topP=${topPSlider.value} contextTokens=$contextTokens cpuThreads=$cpuThreads template=${promptTemplate.name} customTemplateCharacters=${customPromptTemplate.length}"
             )
             view.findViewById<TextView>(R.id.inference_settings_message)
                 .setText(R.string.inference_saved_message)

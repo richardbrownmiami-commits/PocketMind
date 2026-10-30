@@ -30,10 +30,15 @@ internal object ScheduledAlarmScheduler {
         val requestCode = requestCode(triggerAtMillis)
         val key = "$PREFIX$requestCode"
         val preferences = app.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-        check(preferences.edit()
-            .putLong("$key.trigger", triggerAtMillis)
-            .putString("$key.label", label.orEmpty())
-            .commit()) { "Could not persist the alarm schedule" }
+        try {
+            check(preferences.edit()
+                .putLong("$key.trigger", triggerAtMillis)
+                .putString("$key.label", label.orEmpty())
+                .commit()) { "Could not persist the alarm schedule" }
+        } catch (e: Exception) {
+            AppLog.error(app, "ALARM_SCHEDULE_PERSIST_FAILED", e)
+            throw e
+        }
         try {
             ensureChannel(app)
             setAlarm(app, requestCode, triggerAtMillis)
@@ -52,20 +57,25 @@ internal object ScheduledAlarmScheduler {
         val now = System.currentTimeMillis()
         var restored = 0
         var expired = 0
-        preferences.all.keys.filter { it.startsWith(PREFIX) && it.endsWith(".trigger") }.forEach { triggerKey ->
-            val requestCode = triggerKey.removePrefix(PREFIX).removeSuffix(".trigger").toIntOrNull() ?: return@forEach
-            val triggerAt = preferences.getLong(triggerKey, 0L)
-            if (triggerAt <= now) {
-                val prefix = "$PREFIX$requestCode"
-                preferences.edit().remove("$prefix.trigger").remove("$prefix.label").apply()
-                expired++
-            } else {
-                ensureChannel(app)
-                setAlarm(app, requestCode, triggerAt)
-                restored++
+        try {
+            preferences.all.keys.filter { it.startsWith(PREFIX) && it.endsWith(".trigger") }.forEach { triggerKey ->
+                val requestCode = triggerKey.removePrefix(PREFIX).removeSuffix(".trigger").toIntOrNull() ?: return@forEach
+                val triggerAt = preferences.getLong(triggerKey, 0L)
+                if (triggerAt <= now) {
+                    val prefix = "$PREFIX$requestCode"
+                    preferences.edit().remove("$prefix.trigger").remove("$prefix.label").apply()
+                    expired++
+                } else {
+                    ensureChannel(app)
+                    setAlarm(app, requestCode, triggerAt)
+                    restored++
+                }
             }
+            AppLog.info(app, "ALARM_RESTORE_AFTER_BOOT_FINISHED", "restored=$restored expired=$expired")
+        } catch (e: Exception) {
+            AppLog.error(app, "ALARM_RESTORE_AFTER_BOOT_FAILED", e, "restored=$restored expired=$expired")
+            throw e
         }
-        AppLog.info(app, "ALARM_RESTORE_AFTER_BOOT_FINISHED", "restored=$restored expired=$expired")
     }
 
     fun deliver(context: Context, requestCode: Int) {
@@ -79,6 +89,8 @@ internal object ScheduledAlarmScheduler {
             return
         }
         val label = preferences.getString("$key.label", null)?.takeIf { it.isNotBlank() }
+        AppLog.info(app, "ALARM_DELIVERY_STARTED", "scheduled=true")
+        try {
         ensureChannel(app)
         if (notificationsEnabled(app)) {
             val openApp = PendingIntent.getActivity(
@@ -102,6 +114,11 @@ internal object ScheduledAlarmScheduler {
             AppLog.warn(app, "ALARM_NOTIFICATION_SKIPPED", "reason=notifications_disabled")
         }
         preferences.edit().remove("$key.trigger").remove("$key.label").apply()
+        AppLog.info(app, "ALARM_DELIVERY_FINISHED", "outcome=handled notificationEnabled=${notificationsEnabled(app)}")
+        } catch (e: Exception) {
+            AppLog.error(app, "ALARM_DELIVERY_FAILED", e)
+            throw e
+        }
     }
 
     private fun setAlarm(context: Context, requestCode: Int, triggerAtMillis: Long) {
@@ -147,14 +164,21 @@ internal object ScheduledAlarmScheduler {
 
 class ScheduledAlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
-        if (intent?.action != ScheduledAlarmScheduler.ACTION_FIRE) return
+        if (intent?.action != ScheduledAlarmScheduler.ACTION_FIRE) {
+            AppLog.info(context, "ALARM_RECEIVER_IGNORED", "receiver=scheduled_alarm reason=unexpected_action")
+            return
+        }
         val requestCode = intent.getIntExtra(ScheduledAlarmScheduler.EXTRA_REQUEST_CODE, -1)
         if (requestCode >= 0) ScheduledAlarmScheduler.deliver(context, requestCode)
+        else AppLog.warn(context, "ALARM_RECEIVER_IGNORED", "receiver=scheduled_alarm reason=invalid_code")
     }
 }
 
 class ScheduledAlarmBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
-        if (intent?.action == Intent.ACTION_BOOT_COMPLETED) ScheduledAlarmScheduler.restoreAfterBoot(context)
+        if (intent?.action == Intent.ACTION_BOOT_COMPLETED) {
+            AppLog.info(context, "ALARM_BOOT_EVENT_RECEIVED")
+            ScheduledAlarmScheduler.restoreAfterBoot(context)
+        } else AppLog.info(context, "ALARM_BOOT_EVENT_IGNORED", "reason=unexpected_action")
     }
 }

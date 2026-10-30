@@ -6,9 +6,11 @@ import android.database.Cursor
 import io.requery.android.database.sqlite.SQLiteDatabase
 import io.requery.android.database.sqlite.SQLiteOpenHelper
 import java.security.MessageDigest
+import com.pocketmind.tools.AppLog
 
 class AppDatabase(context: Context, databaseName: String = "pocketmind_memory.db") : SQLiteOpenHelper(context, databaseName, null, 2) {
     override fun onCreate(db: SQLiteDatabase) {
+        AppLog.databaseOperation("database", "schema_create") {
         db.execSQL("CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL, content TEXT NOT NULL, time INTEGER NOT NULL)")
         db.execSQL("CREATE TABLE IF NOT EXISTS topic_state(id INTEGER PRIMARY KEY CHECK(id=1), entity TEXT NOT NULL, kind TEXT NOT NULL, last_question TEXT NOT NULL, updated INTEGER NOT NULL)")
         db.execSQL("CREATE TABLE IF NOT EXISTS summaries(id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL, updated INTEGER NOT NULL)")
@@ -26,30 +28,44 @@ class AppDatabase(context: Context, databaseName: String = "pocketmind_memory.db
         db.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(content)")
         db.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS action_log_fts USING fts5(action_id UNINDEXED, request, tool, args, outcome, message, source)")
         db.execSQL("INSERT INTO action_log_fts(rowid,action_id,request,tool,args,outcome,message,source) SELECT a.id,a.id,a.request,a.tool,a.args,a.outcome,a.message,a.source FROM action_log a WHERE NOT EXISTS (SELECT 1 FROM action_log_fts f WHERE f.rowid=a.id)")
+        }
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        AppLog.databaseOperation("database", "schema_upgrade") {
         if (oldVersion < 2) db.execSQL("ALTER TABLE action_log ADD COLUMN source TEXT NOT NULL DEFAULT 'legacy'")
         onCreate(db)
+        }
     }
 }
 
 private fun Cursor.text(column: String): String = getString(getColumnIndexOrThrow(column))
 private fun SQLiteDatabase.forEach(sql: String, args: Array<String>? = null, block: (Cursor) -> Unit) {
-    rawQuery(sql, args).use { cursor -> while (cursor.moveToNext()) block(cursor) }
+    val store = Regex("(?i)\\b(?:FROM|JOIN)\\s+([a-z_][a-z0-9_]*)")
+        .find(sql)?.groupValues?.get(1)?.lowercase() ?: "unknown"
+    var rows = 0
+    AppLog.databaseOperation(store, "read", { "rows=$rows" }) {
+        rawQuery(sql, args).use { cursor ->
+            while (cursor.moveToNext()) {
+                block(cursor)
+                rows++
+            }
+        }
+    }
 }
 
 class MessageStore(private val db: SQLiteDatabase) {
     constructor(helper: AppDatabase) : this(helper.writableDatabase)
 
-    fun append(role: String, content: String, timeMillis: Long = System.currentTimeMillis()): Long {
+    fun append(role: String, content: String, timeMillis: Long = System.currentTimeMillis()): Long =
+        AppLog.databaseOperation("messages", "append", { "inserted=${it > 0L}" }) {
         require(role == "user" || role == "assistant" || role == "system")
         val clean = content.take(20_000)
         val id = db.insert("messages", null, ContentValues().apply {
             put("role", role); put("content", clean); put("time", timeMillis)
         })
         if (id > 0) db.execSQL("INSERT INTO messages_fts(message_id,role,content) VALUES(?,?,?)", arrayOf(id, role, clean))
-        return id
+        id
     }
 
     fun recent(limit: Int = 8): List<Message> = query("SELECT id,role,content,time FROM messages ORDER BY id DESC LIMIT ?", arrayOf(limit.coerceIn(0, 100).toString())).reversed()
@@ -72,10 +88,12 @@ class TopicStateStore(private val db: SQLiteDatabase) {
     constructor(helper: AppDatabase) : this(helper.writableDatabase)
 
     fun set(entity: String, kind: String, lastQuestion: String, nowMillis: Long) {
+        AppLog.databaseOperation("topic_state", "upsert") {
         val values = ContentValues().apply {
             put("id", 1); put("entity", entity.take(100)); put("kind", kind.take(40)); put("last_question", lastQuestion.take(500)); put("updated", nowMillis)
         }
         db.insertWithOnConflict("topic_state", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+        }
     }
 
     fun current(nowMillis: Long): TopicState? {
@@ -115,10 +133,12 @@ class SummaryStore(private val db: SQLiteDatabase) {
         return value
     }
     fun update(text: String) {
+        AppLog.databaseOperation("summaries", "upsert") {
         val values = ContentValues().apply {
             put("id", 1); put("body", MemoryRules.boundedSummary(text, 80)); put("updated", System.currentTimeMillis())
         }
         db.insertWithOnConflict("summaries", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+        }
     }
 }
 
@@ -127,12 +147,12 @@ data class Fact(val key: String, val value: String, val autoCreated: Boolean = t
 class FactStore(private val db: SQLiteDatabase) {
     constructor(helper: AppDatabase) : this(helper.writableDatabase)
 
-    fun capture(text: String): Boolean {
-        val candidate = MemoryRules.extractFact(text) ?: return false
+    fun capture(text: String): Boolean = AppLog.databaseOperation("facts", "capture", { "saved=$it" }) {
+        val candidate = MemoryRules.extractFact(text) ?: return@databaseOperation false
         val values = ContentValues().apply {
             put("key", candidate.key); put("value", candidate.value); put("auto", 1); put("created", System.currentTimeMillis())
         }
-        return db.insertWithOnConflict("facts", null, values, SQLiteDatabase.CONFLICT_REPLACE) >= 0
+        db.insertWithOnConflict("facts", null, values, SQLiteDatabase.CONFLICT_REPLACE) >= 0
     }
 
     fun all(): List<Fact> {
@@ -154,14 +174,18 @@ class FactStore(private val db: SQLiteDatabase) {
             .filter { it.second > 0 }.sortedByDescending { it.second }.take(limit.coerceIn(0, 3)).map { it.first }
     }
 
-    fun forget(query: String): Int {
+    fun forget(query: String): Int = AppLog.databaseOperation("facts", "forget", { "deleted=$it" }) {
         val clean = query.trim().lowercase()
-        if (clean.isEmpty()) return 0
-        return db.delete("facts", "lower(key)=? OR lower(value) LIKE ?", arrayOf(clean, "%$clean%"))
+        if (clean.isEmpty()) 0
+        else db.delete("facts", "lower(key)=? OR lower(value) LIKE ?", arrayOf(clean, "%$clean%"))
     }
 
-    fun delete(key: String): Boolean = db.delete("facts", "lower(key)=?", arrayOf(key.lowercase())) > 0
-    fun clearAutoCreated() { db.delete("facts", "auto=1", null) }
+    fun delete(key: String): Boolean = AppLog.databaseOperation("facts", "delete", { "deleted=$it" }) {
+        db.delete("facts", "lower(key)=?", arrayOf(key.lowercase())) > 0
+    }
+    fun clearAutoCreated() {
+        AppLog.databaseOperation("facts", "clear_auto_created", { "deleted=$it" }) { db.delete("facts", "auto=1", null) }
+    }
 }
 
 data class RecallSnippet(val id: Long, val messageId: Long?, val text: String, val created: Long)
@@ -170,14 +194,17 @@ class RecallStore(private val db: SQLiteDatabase) {
     constructor(helper: AppDatabase) : this(helper.writableDatabase)
 
     fun index(messageId: Long?, snippet: String) {
-        val clean = snippet.trim().take(700)
-        if (clean.isEmpty()) return
-        val values = ContentValues().apply {
-            if (messageId != null) put("message_id", messageId)
-            put("snippet", clean); put("features", features(clean)); put("created", System.currentTimeMillis())
+        AppLog.databaseOperation("recall", "index") {
+            val clean = snippet.trim().take(700)
+            if (clean.isNotEmpty()) {
+                val values = ContentValues().apply {
+                    if (messageId != null) put("message_id", messageId)
+                    put("snippet", clean); put("features", features(clean)); put("created", System.currentTimeMillis())
+                }
+                val id = db.insert("recall", null, values)
+                if (id > 0) db.execSQL("INSERT INTO recall_fts(rowid,snippet) VALUES(?,?)", arrayOf(id, clean))
+            }
         }
-        val id = db.insert("recall", null, values)
-        if (id > 0) db.execSQL("INSERT INTO recall_fts(rowid,snippet) VALUES(?,?)", arrayOf(id, clean))
     }
 
     fun recall(query: String, currentMessageId: Long?): List<RecallSnippet> {
@@ -197,6 +224,7 @@ class RecallStore(private val db: SQLiteDatabase) {
                 }
             }
         } catch (_: Exception) {
+            AppLog.warn("DB_READ_FALLBACK", "store=recall reason=fts_unavailable")
             db.forEach("SELECT id,message_id,snippet,created,features FROM recall ORDER BY created DESC LIMIT 100") { c ->
                 val mid = if (c.isNull(1)) null else c.getLong(1)
                 if (currentMessageId == null || mid != currentMessageId) {
@@ -211,8 +239,10 @@ class RecallStore(private val db: SQLiteDatabase) {
     }
 
     fun clear() {
-        db.delete("recall", null, null)
-        try { db.execSQL("DELETE FROM recall_fts") } catch (_: Exception) { }
+        AppLog.databaseOperation("recall", "clear") {
+            db.delete("recall", null, null)
+            try { db.execSQL("DELETE FROM recall_fts") } catch (_: Exception) { }
+        }
     }
 
     private fun features(text: String): ByteArray {
@@ -237,6 +267,7 @@ class ActionLogStore(private val db: SQLiteDatabase) {
     constructor(helper: AppDatabase) : this(helper.writableDatabase)
 
     fun record(request: String, tool: String, argsJson: String, outcome: String, message: String, source: String = "legacy") {
+        AppLog.databaseOperation("action_log", "record") {
         val safeArgs = Regex("(?:hour|minute|daysFromToday|seconds|level|step|index|enabled)=([^,}]+)").findAll(argsJson)
             .joinToString(prefix = "{", postfix = "}") { "${it.groupValues[0]}" }.take(500)
         val safeMessage = when (tool) {
@@ -260,6 +291,7 @@ class ActionLogStore(private val db: SQLiteDatabase) {
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
+        }
         }
     }
 
@@ -311,13 +343,19 @@ class ActionLogStore(private val db: SQLiteDatabase) {
 data class ActionRecord(val id: Long, val request: String, val tool: String, val argsJson: String, val outcome: String, val message: String, val created: Long, val source: String)
 
 fun clearMemory(db: SQLiteDatabase) {
-    RecallStore(db).clear()
-    db.delete("messages", null, null)
-    try { db.execSQL("DELETE FROM messages_fts") } catch (_: Exception) { }
-    db.delete("summaries", null, null)
-    db.delete("topic_state", null, null)
-    FactStore(db).clearAutoCreated()
-    db.delete("action_log", null, null)
-    try { db.execSQL("DELETE FROM action_log_fts") } catch (_: Exception) { }
+    AppLog.databaseOperation("memory", "clear") {
+        RecallStore(db).clear()
+        AppLog.databaseOperation("messages", "clear") {
+            db.delete("messages", null, null)
+            try { db.execSQL("DELETE FROM messages_fts") } catch (_: Exception) { }
+        }
+        AppLog.databaseOperation("summaries", "clear") { db.delete("summaries", null, null) }
+        AppLog.databaseOperation("topic_state", "clear") { db.delete("topic_state", null, null) }
+        FactStore(db).clearAutoCreated()
+        AppLog.databaseOperation("action_log", "clear") {
+            db.delete("action_log", null, null)
+            try { db.execSQL("DELETE FROM action_log_fts") } catch (_: Exception) { }
+        }
+    }
 }
 fun clearMemory(helper: AppDatabase) = clearMemory(helper.writableDatabase)

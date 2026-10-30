@@ -10,7 +10,7 @@
     <string name="menu_debug_logger">Debug logger</string>
     <string name="menu_clear_memory">Clear memory</string>
     <string name="debug_log_title">Debug logger</string>
-    <string name="debug_log_privacy_note">Latest app activity is stored only on this device; new entries omit chat and prompt text. Use Export logs for the full retained history.</string>
+    <string name="debug_log_privacy_note">Full-content capture is enabled only in debuggable builds. In that mode, the on-device log records chat messages, rendered prompts (including recalled context), and generated responses; content is not written to Logcat. Logs remain in app-private storage unless exported. Credential and URL scrubbing is best-effort; inspect before sharing. Clear logs to remove retained history.</string>
     <string name="debug_log_refresh">Refresh</string>
     <string name="debug_log_clear">Clear logs</string>
     <string name="debug_log_empty">No debug events have been recorded yet.</string>

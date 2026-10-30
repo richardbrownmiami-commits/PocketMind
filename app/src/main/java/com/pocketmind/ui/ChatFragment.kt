@@ -4,6 +4,7 @@ import android.animation.ValueAnimator
 import android.content.Intent
 import android.content.res.ColorStateList
 import android.os.Bundle
+import android.os.SystemClock
 import android.os.Handler
 import android.os.Looper
 import android.view.View
@@ -21,6 +22,7 @@ import com.pocketmind.core.GenerationService
 import com.pocketmind.memory.AppDatabase
 import com.pocketmind.memory.MessageStore
 import com.pocketmind.tools.AppLog
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -81,13 +83,19 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
         updateSendButton(generationActive)
         chatViews.send.setOnClickListener {
             if (generationActive) {
-                AppLog.info(requireContext(), "CHAT_STOP_REQUESTED")
-                controller.stop()
-            } else submit()
+                AppLog.info(requireContext(), "UI_CONTROL_TAPPED", "screen=chat control=stop_button")
+                AppLog.info(requireContext(), "CHAT_STOP_REQUESTED", "source=stop_button")
+                controller.stop("stop_button")
+            } else {
+                AppLog.info(requireContext(), "UI_CONTROL_TAPPED", "screen=chat control=send_button")
+                submit("send_button")
+            }
         }
         chatViews.input.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEND) {
-                if (!generationActive && chatViews.send.isEnabled) submit()
+                AppLog.info(requireContext(), "UI_CONTROL_TAPPED", "screen=chat control=keyboard_send")
+                if (!generationActive && chatViews.send.isEnabled) submit("keyboard_send")
+                else AppLog.info(requireContext(), "CHAT_SUBMISSION_REJECTED", "source=keyboard_send reason=${if (generationActive) "generation_active" else "button_disabled"}")
                 true
             } else false
         }
@@ -96,26 +104,54 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
 
     private fun loadHistory() {
         val context = requireContext().applicationContext
+        AppLog.info(context, "CHAT_HISTORY_LOAD_STARTED")
         viewScope?.launch {
-            val history = withContext(Dispatchers.IO) {
-                val db = AppDatabase(context)
-                try { MessageStore(db).recent(60).map { ChatAdapter.Line(it.role, it.content, it.time) } }
-                finally { db.close() }
+            try {
+                val history = withContext(Dispatchers.IO) {
+                    val db = AppDatabase(context)
+                    try { MessageStore(db).recent(60).map { ChatAdapter.Line(it.role, it.content, it.time) } }
+                    finally { db.close() }
+                }
+                val activeViews = views
+                if (activeViews == null) {
+                    AppLog.info(context, "CHAT_HISTORY_LOAD_FINISHED", "outcome=cancelled reason=view_destroyed")
+                    return@launch
+                }
+                adapter?.replace(history)
+                AppLog.info(context, "CHAT_HISTORY_LOADED", "messages=${history.size}")
+                AppLog.info(context, "CHAT_HISTORY_LOAD_FINISHED", "outcome=success messages=${history.size}")
+                activeViews.send.isEnabled = true
+                updateSendButton(generationActive)
+                scrollToBottom()
+            } catch (e: CancellationException) {
+                AppLog.info(context, "CHAT_HISTORY_LOAD_FINISHED", "outcome=cancelled")
+                throw e
+            } catch (e: Exception) {
+                AppLog.error(context, "CHAT_HISTORY_LOAD_FAILED", e)
+                throw e
             }
-            val activeViews = views ?: return@launch
-            adapter?.replace(history)
-            AppLog.info(context, "CHAT_HISTORY_LOADED", "messages=${history.size}")
-            activeViews.send.isEnabled = true
-            updateSendButton(generationActive)
-            scrollToBottom()
         }
     }
 
-    private fun submit() {
-        val activeViews = views ?: return
+    private fun submit(source: String) {
+        val logContext = context?.applicationContext
+        val activeViews = views
+        if (activeViews == null) {
+            logContext?.let { AppLog.info(it, "CHAT_SUBMISSION_REJECTED", "source=$source reason=view_unavailable") }
+            return
+        }
         val text = activeViews.input.text?.toString()?.trim().orEmpty()
-        if (text.isEmpty() || !activeViews.send.isEnabled || generationActive) return
-        AppLog.info(requireContext(), "CHAT_MESSAGE_SUBMITTED", "characters=${text.length}")
+        val rejectionReason = when {
+            text.isEmpty() -> "empty_message"
+            !activeViews.send.isEnabled -> "button_disabled"
+            generationActive -> "generation_active"
+            else -> null
+        }
+        if (rejectionReason != null) {
+            logContext?.let { AppLog.info(it, "CHAT_SUBMISSION_REJECTED", "source=$source reason=$rejectionReason") }
+            return
+        }
+        AppLog.info(requireContext(), "CHAT_MESSAGE_SUBMITTED", "source=$source characters=${text.length}")
         activeViews.input.setText("")
         adapter?.add("user", text, animateOnInsert = true)
         val answerRow = adapter?.add("assistant", "", thinking = true, timestampFinalized = false) ?: return
@@ -130,13 +166,16 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
                 context,
                 Intent(context, GenerationService::class.java).setAction(GenerationService.ACTION_START)
             )
-        } catch (_: Exception) { }
+        } catch (e: Exception) {
+            AppLog.error(context, "GENERATION_SERVICE_START_FAILED", e)
+        }
 
         val streamed = StringBuilder()
         val streamLock = Any()
         val uiUpdatePending = AtomicBoolean(false)
         var renderedLength = 0
         val firstToken = AtomicBoolean(false)
+        val requestStartedAt = SystemClock.elapsedRealtime()
         var requestOutcome = "success"
 
         fun scheduleStreamUpdate() {
@@ -158,15 +197,19 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
         viewScope?.launch {
             try {
                 val reply = controller.send(text) { chunk ->
-                    if (firstToken.compareAndSet(false, true)) handler.post { stopThinking() }
+                    if (firstToken.compareAndSet(false, true)) {
+                        AppLog.info(context, "CHAT_FIRST_TOKEN", "durationMs=${SystemClock.elapsedRealtime() - requestStartedAt}")
+                        handler.post { stopThinking() }
+                    }
                     synchronized(streamLock) { streamed.append(chunk) }
                     scheduleStreamUpdate()
                 }
                 adapter?.update(answerRow, reply.text, reply.actions, time = reply.completedAtMillis)
-                AppLog.info(context, "CHAT_REPLY_READY", "actions=${reply.actions.size} responseCharacters=${reply.text.length}")
+                requestOutcome = if (reply.text == "Generation was stopped or failed.") "generation_stopped_or_failed" else "success"
+                AppLog.info(context, "CHAT_REPLY_READY", "actions=${reply.actions.size} responseCharacters=${reply.text.length} outcome=$requestOutcome")
             } catch (e: Exception) {
-                requestOutcome = "failed"
-                AppLog.error(context, "CHAT_REQUEST_FAILED", e)
+                requestOutcome = if (e is CancellationException) "cancelled" else "failed"
+                AppLog.error(context, "CHAT_REQUEST_FAILED", e, "outcome=$requestOutcome")
                 adapter?.update(answerRow, "PocketMind could not finish: ${e.message ?: "unexpected error"}", time = System.currentTimeMillis())
             } finally {
                 stopThinking()
@@ -177,8 +220,9 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
                     it.send.isEnabled = true
                     updateSendButton(false)
                 }
-                context.stopService(Intent(context, GenerationService::class.java))
-                AppLog.info(context, "CHAT_REQUEST_FINISHED", "outcome=$requestOutcome")
+                val serviceWasRunning = context.stopService(Intent(context, GenerationService::class.java))
+                AppLog.info(context, "GENERATION_SERVICE_STOP_REQUESTED", "serviceWasRunning=$serviceWasRunning")
+                AppLog.info(context, "CHAT_REQUEST_FINISHED", "outcome=$requestOutcome durationMs=${SystemClock.elapsedRealtime() - requestStartedAt}")
                 scrollToBottom()
             }
         }
@@ -249,7 +293,8 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
         // inference too; otherwise the cancelled coroutine can leave the JNI engine
         // running with no UI consumer, wasting CPU and delaying the next request.
         if (generationActive) {
-            controller.stop()
+            AppLog.info(requireContext(), "CHAT_REQUEST_CANCELLED", "reason=view_destroyed")
+            controller.stop("view_destroyed")
             generationActive = false
         }
         stopThinking()

@@ -26,6 +26,7 @@ import kotlinx.coroutines.withContext
 class MainActivity : AppCompatActivity() {
     private val uiScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var bottomNavigation: BottomNavigationView
+    private var suppressNavigationLogging = false
     private val exportLogRequest = 4101
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -43,7 +44,17 @@ class MainActivity : AppCompatActivity() {
                 .replace(R.id.fragment_container, ChatFragment(), TAG_CHAT)
                 .commit()
         }
-        bottomNavigation.setOnItemSelectedListener { item -> showTab(item.itemId) }
+        bottomNavigation.setOnItemSelectedListener { item ->
+            val destination = navigationDestination(item.itemId)
+            if (!suppressNavigationLogging) AppLog.info(this, "UI_CONTROL_TAPPED", "screen=main control=bottom_navigation destination=$destination")
+            val accepted = showTab(item.itemId)
+            if (!suppressNavigationLogging) AppLog.info(this, "NAVIGATION_SELECTION_RESULT", "destination=$destination outcome=${if (accepted) "accepted" else "rejected"}")
+            accepted
+        }
+        bottomNavigation.setOnItemReselectedListener { item ->
+            AppLog.info(this, "UI_CONTROL_TAPPED", "screen=main control=bottom_navigation_reselect destination=${navigationDestination(item.itemId)}")
+            AppLog.info(this, "NAVIGATION_SELECTION_RESULT", "destination=${navigationDestination(item.itemId)} outcome=already_selected")
+        }
         supportFragmentManager.addOnBackStackChangedListener {
             val current = supportFragmentManager.findFragmentById(R.id.fragment_container)
             bottomNavigation.visibility = if (current?.tag == TAG_DEBUG_LOGGER) View.GONE else View.VISIBLE
@@ -85,7 +96,10 @@ class MainActivity : AppCompatActivity() {
             else -> return false
         }
         val current = supportFragmentManager.findFragmentById(R.id.fragment_container)
-        if (current?.tag == destination) return true
+        if (current?.tag == destination) {
+            if (!suppressNavigationLogging) AppLog.info(this, "NAVIGATION_NO_OP", "destination=$destination reason=already_current")
+            return true
+        }
         val fragment = when (destination) {
             TAG_CHAT -> ChatFragment()
             TAG_MODELS -> ModelsFragment()
@@ -103,7 +117,17 @@ class MainActivity : AppCompatActivity() {
             .replace(R.id.fragment_container, fragment, destination)
             .addToBackStack(destination)
             .commit()
+        AppLog.info(this, "NAVIGATION_COMMIT_REQUESTED", "destination=$destination")
         return true
+    }
+
+    private fun navigationDestination(itemId: Int): String = when (itemId) {
+        R.id.nav_chat -> TAG_CHAT
+        R.id.nav_models -> TAG_MODELS
+        R.id.nav_rwkv -> TAG_RWKV
+        R.id.nav_memory -> TAG_MEMORY
+        R.id.nav_settings -> TAG_SETTINGS
+        else -> "unknown"
     }
 
     private fun syncSelectedTab() {
@@ -117,7 +141,10 @@ class MainActivity : AppCompatActivity() {
             TAG_SETTINGS -> R.id.nav_settings
             else -> return
         }
-        if (bottomNavigation.selectedItemId != selectedId) bottomNavigation.selectedItemId = selectedId
+        if (bottomNavigation.selectedItemId != selectedId) {
+            suppressNavigationLogging = true
+            try { bottomNavigation.selectedItemId = selectedId } finally { suppressNavigationLogging = false }
+        }
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
@@ -127,24 +154,29 @@ class MainActivity : AppCompatActivity() {
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean = when (item.itemId) {
         R.id.menu_about -> {
+            AppLog.info(this, "UI_MENU_TAPPED", "action=about")
             AppLog.info(this, "ABOUT_DIALOG_OPENED")
             MaterialAlertDialogBuilder(this)
                 .setTitle(R.string.about_title)
                 .setMessage(R.string.about_message)
-                .setPositiveButton(android.R.string.ok, null)
+                .setPositiveButton(android.R.string.ok) { _, _ -> AppLog.info(this, "ABOUT_DIALOG_DISMISSED", "outcome=confirmed") }
+                .setOnCancelListener { AppLog.info(this, "ABOUT_DIALOG_DISMISSED", "outcome=cancelled") }
                 .show()
             true
         }
         R.id.menu_export_logs -> {
+            AppLog.info(this, "UI_MENU_TAPPED", "action=export_logs")
             exportLogs()
             true
         }
         R.id.menu_debug_logger -> {
+            AppLog.info(this, "UI_MENU_TAPPED", "action=debug_logger")
             openDebugLogger()
             true
         }
         R.id.menu_clear_memory -> {
-            MemoryFragment.confirmClearMemory(this) { clearMemoryFromToolbar() }
+            AppLog.info(this, "UI_MENU_TAPPED", "action=clear_memory")
+            MemoryFragment.confirmClearMemory(this, source = "toolbar") { clearMemoryFromToolbar() }
             true
         }
         else -> super.onOptionsItemSelected(item)
@@ -152,8 +184,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun openDebugLogger() {
         val current = supportFragmentManager.findFragmentById(R.id.fragment_container)
-        if (current?.tag == TAG_DEBUG_LOGGER) return
-        AppLog.info(this, "DEBUG_LOG_VIEW_REQUESTED")
+        if (current?.tag == TAG_DEBUG_LOGGER) {
+            AppLog.info(this, "DEBUG_LOG_VIEW_REQUESTED", "outcome=already_open")
+            return
+        }
+        AppLog.info(this, "DEBUG_LOG_VIEW_REQUESTED", "outcome=navigation_requested")
         supportFragmentManager.beginTransaction()
             .setReorderingAllowed(true)
             .replace(R.id.fragment_container, DebugLogFragment(), TAG_DEBUG_LOGGER)
@@ -164,23 +199,38 @@ class MainActivity : AppCompatActivity() {
 
     private fun exportLogs() {
         AppLog.info(this, "LOG_EXPORT_REQUEST")
-        startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE)
-            type = "text/plain"
-            putExtra(Intent.EXTRA_TITLE, "pocketmind-diagnostics.log")
-        }, exportLogRequest)
+        try {
+            startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TITLE, "pocketmind-diagnostics.log")
+            }, exportLogRequest)
+            AppLog.info(this, "LOG_EXPORT_PICKER_OPENED")
+        } catch (e: Exception) {
+            AppLog.error(this, "LOG_EXPORT_PICKER_FAILED", e)
+            throw e
+        }
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != exportLogRequest || resultCode != Activity.RESULT_OK || data?.data == null) return
-        val uri = data.data ?: return
+        if (requestCode != exportLogRequest) return
+        if (resultCode != Activity.RESULT_OK) {
+            AppLog.info(this, "LOG_EXPORT_PICKER_RESULT", "outcome=cancelled resultCode=$resultCode")
+            return
+        }
+        val uri = data?.data
+        if (uri == null) {
+            AppLog.warn(this, "LOG_EXPORT_PICKER_RESULT", "outcome=failed reason=missing_uri")
+            return
+        }
+        AppLog.info(this, "LOG_EXPORT_STARTED")
         uiScope.launch(Dispatchers.IO) {
             try {
-                contentResolver.openOutputStream(uri)?.use { output ->
-                    output.write(AppLog.exportText(this@MainActivity).toByteArray(Charsets.UTF_8))
-                } ?: error("Could not open destination")
-                AppLog.info(this@MainActivity, "LOG_EXPORT_SUCCESS")
+                val text = AppLog.exportText(this@MainActivity)
+                contentResolver.openOutputStream(uri)?.use { output -> output.write(text.toByteArray(Charsets.UTF_8)) }
+                    ?: error("Could not open destination")
+                AppLog.info(this@MainActivity, "LOG_EXPORT_SUCCESS", "bytes=${text.toByteArray(Charsets.UTF_8).size}")
             } catch (e: Exception) {
                 AppLog.error(this@MainActivity, "LOG_EXPORT_FAILED", e)
             }
@@ -191,12 +241,20 @@ class MainActivity : AppCompatActivity() {
         val appContext = applicationContext
         AppLog.info(appContext, "MEMORY_CLEAR_STARTED", "source=toolbar")
         uiScope.launch {
-            withContext(Dispatchers.IO) {
-                val db = AppDatabase(appContext)
-                try { clearMemory(db) } finally { db.close() }
+            try {
+                withContext(Dispatchers.IO) {
+                    val db = AppDatabase(appContext)
+                    try { clearMemory(db) } finally { db.close() }
+                }
+                AppLog.info(appContext, "MEMORY_CLEAR_FINISHED", "source=toolbar outcome=success")
+                (supportFragmentManager.findFragmentById(R.id.fragment_container) as? MemoryFragment)?.refresh("after_toolbar_clear")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                AppLog.info(appContext, "MEMORY_CLEAR_FINISHED", "source=toolbar outcome=cancelled")
+                throw e
+            } catch (e: Exception) {
+                AppLog.error(appContext, "MEMORY_CLEAR_FAILED", e, "source=toolbar")
+                throw e
             }
-            AppLog.info(appContext, "MEMORY_CLEAR_FINISHED", "source=toolbar")
-            (supportFragmentManager.findFragmentById(R.id.fragment_container) as? MemoryFragment)?.refresh()
         }
     }
 

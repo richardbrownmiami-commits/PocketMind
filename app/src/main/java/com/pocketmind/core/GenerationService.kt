@@ -22,20 +22,39 @@ class GenerationService : Service() {
     override fun onCreate() {
         super.onCreate()
         AppLog.info(this, "GENERATION_SERVICE_CREATE")
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(NotificationChannel(CHANNEL, "On-device generation", NotificationManager.IMPORTANCE_LOW))
+        try {
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(NotificationChannel(CHANNEL, "On-device generation", NotificationManager.IMPORTANCE_LOW))
+            AppLog.info(this, "GENERATION_SERVICE_CHANNEL_READY")
+        } catch (e: Exception) {
+            AppLog.error(this, "GENERATION_SERVICE_CHANNEL_FAILED", e)
+            throw e
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        AppLog.info(this, "GENERATION_SERVICE_START", "action=${intent?.action ?: "none"} startId=$startId")
+        val actionType = when (intent?.action) {
+            ACTION_START -> "start"
+            ACTION_STOP -> "stop"
+            null -> "none"
+            else -> "other"
+        }
+        AppLog.info(this, "GENERATION_SERVICE_START", "actionType=$actionType startId=$startId flags=$flags")
         if (intent?.action == ACTION_STOP) {
             AppLog.info(this, "GENERATION_SERVICE_STOP_REQUEST")
             stopForeground(true)
             stopSelf(startId)
+            AppLog.info(this, "GENERATION_SERVICE_STOP_ACCEPTED", "startId=$startId")
             return START_NOT_STICKY
         }
-        startForeground(NOTIFICATION_ID, notification())
-        return START_NOT_STICKY
+        return try {
+            startForeground(NOTIFICATION_ID, notification())
+            AppLog.info(this, "GENERATION_SERVICE_FOREGROUND", "outcome=started startId=$startId")
+            START_NOT_STICKY
+        } catch (e: Exception) {
+            AppLog.error(this, "GENERATION_SERVICE_FOREGROUND_FAILED", e, "startId=$startId")
+            throw e
+        }
     }
 
     override fun onDestroy() {
@@ -51,5 +70,8 @@ class GenerationService : Service() {
         .setOnlyAlertOnce(true)
         .build()
 
-    override fun onBind(intent: Intent?): IBinder? = null
+    override fun onBind(intent: Intent?): IBinder? {
+        AppLog.info(this, "GENERATION_SERVICE_BIND_REQUESTED", "outcome=not_bound")
+        return null
+    }
 }

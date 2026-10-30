@@ -160,6 +160,8 @@ class AgentController(context: Context) : Closeable {
         private set
     @Volatile private var generationStartedAtElapsedRealtime: Long? = null
     @Volatile private var hasGenerationMetrics: Boolean = false
+    @Volatile private var generationCancellationReason: String? = null
+    @Volatile private var currentGenerationPhase: String? = null
     @Volatile private var lastGenerationCompletedAtMillis: Long = 0
     @Volatile private var lastUserFacingGenerationCompletedAtMillis: Long? = null
     private var contextSize = 512
@@ -170,7 +172,11 @@ class AgentController(context: Context) : Closeable {
     suspend fun send(text: String, onToken: (String) -> Unit = {}): AgentReply = withContext(dispatcher) {
         ensureOpen()
         val raw = text.trim()
-        if (raw.isEmpty()) return@withContext AgentReply("Please enter a message.")
+        if (raw.isEmpty()) {
+            AppLog.info(app, "AGENT_REQUEST_REJECTED", "reason=empty_message")
+            return@withContext AgentReply("Please enter a message.")
+        }
+        AppLog.content(app, "USER_MESSAGE_CONTENT", raw, "source=chat")
         AppLog.info(app, "AGENT_REQUEST_RECEIVED", "characters=${raw.length}")
         lastUserFacingGenerationCompletedAtMillis = null
 
@@ -352,21 +358,26 @@ class AgentController(context: Context) : Closeable {
         }
 
         val memoryNeeds = MemoryRules.memoryNeeds(raw)
+        AppLog.info(app, "CONTEXT_ASSEMBLY_STARTED", "purpose=chat recallRequested=${memoryNeeds.recall} factsRequested=${memoryNeeds.facts}")
         val currentRecall = if (memoryNeeds.recall && preferences.getBoolean("recall_enabled", true)) recall.recall(resolved, userId).take(2).map { it.text }.let { capChars(it, 700) } else emptyList()
         val factContext = if (memoryNeeds.facts && preferences.getBoolean("facts_enabled", true)) facts.relevant(resolved, 3).map { "${it.key}: ${it.value}" }.toMutableList() else mutableListOf()
         topic?.let { factContext.add("Current topic: ${it.entity}") }
         val lastExchange = messages.lastExchangeBefore(userId).map { "${it.role}: ${it.content}" }
+        val summaryContext = summaries.get()
+        AppLog.info(app, "CONTEXT_ASSEMBLY_SOURCES", "recallItems=${currentRecall.size} factItems=${factContext.size} summaryPresent=${summaryContext != null} lastExchangeMessages=${lastExchange.size} topicPresent=${topic != null}")
         val promptSettings = inferenceSettingsStore.load()
         val fittedPrompt = try {
             PromptBudget.fit(
-                PromptBudget.Inputs(resolved, currentRecall, summaries.get(), factContext, lastExchange),
+                PromptBudget.Inputs(resolved, currentRecall, summaryContext, factContext, lastExchange),
                 contextSize - ANSWER_TOKENS,
                 engine::countTokens
             ) { system, user -> engine.formatPrompt(system, user, promptSettings) }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            AppLog.warn(app, "CONTEXT_BUDGET_FAILED", "errorType=${e::class.java.simpleName} outcome=fit_failed")
             AppLog.warn(app, "AGENT_REPLY_PATH", "path=context_overflow")
             return@withContext AgentReply("That question is too long for the available model context. Please shorten it and try again.")
         }
+        AppLog.info(app, "CONTEXT_BUDGET_RESULT", "outcome=fit tokens=${fittedPrompt.tokens} capacityTokens=${contextSize - ANSWER_TOKENS} droppedSources=${fittedPrompt.dropped.joinToString(",").ifBlank { "none" }}")
         lastPromptTokens = fittedPrompt.tokens
         val prompt = fittedPrompt.prompt
         val generatedResponse = generateOrNull(prompt, ANSWER_TOKENS, null, onToken, "chat_response")
@@ -418,9 +429,13 @@ class AgentController(context: Context) : Closeable {
         "Model unloaded."
     }
     fun isModelLoaded(path: String): Boolean = loadedPath == path
-    fun stop() {
-        AppLog.info(app, "INFERENCE_STOP_REQUESTED")
-        try { engine.cancel() } catch (_: Throwable) { }
+    fun stop(source: String = "unspecified") {
+        val phase = currentGenerationPhase ?: "idle"
+        generationCancellationReason = "requested"
+        AppLog.info(app, "INFERENCE_STOP_REQUESTED", "source=$source phase=$phase")
+        try { engine.cancel() } catch (e: Throwable) {
+            AppLog.error(app, "INFERENCE_STOP_FAILED", e, "source=$source phase=$phase")
+        }
     }
     fun status(): String {
         if (loadedPath == null) return "No model loaded"
@@ -452,12 +467,16 @@ class AgentController(context: Context) : Closeable {
         generated: String,
         validate: (List<PlanStep>) -> PlanProblem?
     ): PlanCheck {
+        AppLog.info(app, "PLANNER_JSON_PARSE_STARTED")
         val steps = try {
             PlannerJson.parse(generated)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            AppLog.warn(app, "PLANNER_JSON_PARSE_FAILED", "errorType=${e::class.java.simpleName}")
             return PlanCheck(problem = PlanProblem("JSON parsing", "the model did not return valid action JSON."))
         }
+        AppLog.info(app, "PLANNER_JSON_PARSED", "steps=${steps.size}")
         val problem = validate(steps)
+        AppLog.info(app, "PLANNER_VALIDATION_RESULT", "outcome=${if (problem == null) "valid" else "invalid"} stage=${problem?.stage ?: "none"}")
         return if (problem == null) PlanCheck(steps = steps) else PlanCheck(problem = problem)
     }
 
@@ -470,6 +489,7 @@ class AgentController(context: Context) : Closeable {
     ): PlanCheck {
         val first = checkPlannerOutput(generated, validate)
         val firstProblem = first.problem ?: return first
+        AppLog.info(app, "PLANNER_REPAIR_STARTED", "stage=${firstProblem.stage}")
         val correctionPrompt = buildString {
             append("The previous plan failed host-side validation. Create a corrected next-step plan.\n")
             append("Host validation finding: ").append(firstProblem.stage).append(" — ").append(firstProblem.detail).append('\n')
@@ -481,13 +501,19 @@ class AgentController(context: Context) : Closeable {
         }
         val fittedPrompt = try {
             fitActionPlannerPrompt(correctionPrompt, maxTokens)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            AppLog.warn(app, "PLANNER_REPAIR_FAILED", "reason=context_fit errorType=${e::class.java.simpleName}")
             return PlanCheck(problem = PlanProblem("JSON correction", "the correction prompt could not fit the selected model's context."))
         }
         val corrected = generateOrNull(fittedPrompt, maxTokens, ACTION_GRAMMAR, {}, "planner_correction")
-            ?: return PlanCheck(problem = PlanProblem("JSON correction", "the model could not produce a corrected action plan."))
+            ?: run {
+                AppLog.warn(app, "PLANNER_REPAIR_FAILED", "reason=generation_unavailable")
+                return PlanCheck(problem = PlanProblem("JSON correction", "the model could not produce a corrected action plan."))
+            }
         val result = checkPlannerOutput(corrected, validate)
-        val remainingProblem = result.problem ?: return result
+        val remainingProblem = result.problem
+        AppLog.info(app, "PLANNER_REPAIR_FINISHED", "outcome=${if (remainingProblem == null) "valid" else "invalid"} stage=${remainingProblem?.stage ?: "none"}")
+        if (remainingProblem == null) return result
         return PlanCheck(problem = PlanProblem(
             remainingProblem.stage,
             "the model's one correction attempt did not resolve the problem: ${remainingProblem.detail}"
@@ -521,27 +547,33 @@ class AgentController(context: Context) : Closeable {
         val results = mutableListOf<ActionResult>()
         val executed = mutableListOf<PlanStep>()
         var nextStep: PlanStep? = initialPlan.firstOrNull()
+        var terminationReason = "no_next_step"
+        AppLog.info(app, "AGENT_PLAN_LOOP_STARTED", "initialSteps=${initialPlan.size} allowedTools=${allowedTools.size} maxSteps=$MAX_AGENT_STEPS")
 
         for (iteration in 0 until MAX_AGENT_STEPS) {
             val step = nextStep ?: break
-            if (allowedTools.none { it.id == step.tool }) break
-            if (executed.any { stepSignature(it) == stepSignature(step) }) break
+            if (allowedTools.none { it.id == step.tool }) { terminationReason = "tool_not_allowed"; break }
+            if (executed.any { stepSignature(it) == stepSignature(step) }) { terminationReason = "duplicate_step"; break }
 
             executed += step
             val result = executeValidatedPlan(listOf(step), originalRequest, "planner")
-                .results.singleOrNull() ?: break
+                .results.singleOrNull()
+            if (result == null) { terminationReason = "missing_result"; break }
             results += result
 
             // Only a verified, completed action is safe input for another planning step.
-            if (result.status != ActionStatus.VERIFIED) break
+            if (result.status != ActionStatus.VERIFIED) { terminationReason = "tool_not_verified"; break }
             val nextAttempt = buildNextAgentStep(question, allowedTools, executed, results)
             if (nextAttempt.failure != null) {
                 results += ActionResult("action.plan", ActionStatus.FAILED, nextAttempt.failure)
                 recordPlanFailure(originalRequest, nextAttempt.failure, "planner")
+                terminationReason = "followup_plan_failed"
                 break
             }
             nextStep = nextAttempt.steps?.singleOrNull()
         }
+        if (executed.size >= MAX_AGENT_STEPS && nextStep != null) terminationReason = "max_steps_reached"
+        AppLog.info(app, "AGENT_PLAN_LOOP_FINISHED", "executedSteps=${executed.size} results=${results.size} reason=$terminationReason")
         return ActionExecution(results)
     }
 
@@ -621,7 +653,10 @@ class AgentController(context: Context) : Closeable {
         AppLog.info(app, "ACTION_PLAN_EXECUTION_STARTED", "source=$source steps=${steps.size}")
         return try {
             val results = runtime.execute(steps, originalRequest, source)
-            results.forEach { result -> AppLog.info(app, "ACTION_RESULT", "tool=${result.tool} status=${result.status.name}") }
+            results.forEach { result ->
+                val reason = if (result.status == ActionStatus.FAILED) ToolRuntime.failureCategory(result.tool, result.message) else "none"
+                AppLog.info(app, "ACTION_RESULT", "tool=${result.tool} status=${result.status.name} reason=$reason")
+            }
             AppLog.info(app, "ACTION_PLAN_EXECUTION_FINISHED", "source=$source results=${results.size} durationMs=${SystemClock.elapsedRealtime() - startedAt}")
             ActionExecution(results)
         } catch (e: Throwable) {
@@ -789,18 +824,24 @@ class AgentController(context: Context) : Closeable {
         sink: (String) -> Unit,
         phase: String = "generation"
     ): String? {
-        if (loadedPath == null) return null
+        if (loadedPath == null) {
+            AppLog.warn(app, "GENERATION_SKIPPED", "phase=$phase reason=model_not_loaded")
+            return null
+        }
+        generationCancellationReason = null
+        currentGenerationPhase = phase
         lastPromptTokens = 0
         try { lastPromptTokens = engine.countTokens(prompt) } catch (_: Throwable) { }
         lastOutputTokens = 0
         hasGenerationMetrics = true
         val startedAt = SystemClock.elapsedRealtime()
         generationStartedAtElapsedRealtime = startedAt
+        AppLog.content(app, "MODEL_INPUT_CONTENT", prompt, "phase=$phase")
         AppLog.info(app, "GENERATION_STARTED", "phase=$phase inputTokens=$lastPromptTokens maxOutputTokens=$maxTokens")
         var outcome = "failed"
         var failureType: String? = null
+        val generated = StringBuilder()
         return try {
-            val generated = StringBuilder()
             val sampling = inferenceSettingsStore.load()
             var streamedLength = 0
             var stoppedAt: Int? = null
@@ -818,6 +859,8 @@ class AgentController(context: Context) : Closeable {
                             if (markerIndex > streamedLength) sink(text.substring(streamedLength, markerIndex))
                             streamedLength = markerIndex
                             stoppedAt = markerIndex
+                            generationCancellationReason = "stop_marker"
+                            AppLog.info(app, "GENERATION_STOP_MARKER_DETECTED", "phase=$phase")
                             engine.cancel()
                         } else {
                             val heldChars = GENERATION_STOP_MARKERS.maxOf { marker ->
@@ -839,16 +882,22 @@ class AgentController(context: Context) : Closeable {
                 .also { outcome = if (it == null) "empty" else "complete" }
         } catch (e: Throwable) {
             failureType = e::class.java.simpleName
+            outcome = if (e is java.util.concurrent.CancellationException || generationCancellationReason != null) "cancelled" else "failed"
+            AppLog.error(app, "GENERATION_EXCEPTION", e, "phase=$phase outcome=$outcome")
             null
         } finally {
+            val cancellationReason = generationCancellationReason
+            if (cancellationReason != null) outcome = if (cancellationReason == "stop_marker") "stopped_by_marker" else "cancelled"
             lastGenerationMs = (SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(0)
             lastGenerationCompletedAtMillis = System.currentTimeMillis()
             generationStartedAtElapsedRealtime = null
+            AppLog.content(app, "MODEL_OUTPUT_CONTENT", generated.toString(), "phase=$phase outcome=$outcome")
             AppLog.info(
                 app,
                 "GENERATION_FINISHED",
-                "phase=$phase inputTokens=$lastPromptTokens outputTokens=$lastOutputTokens durationMs=$lastGenerationMs outcome=$outcome${failureType?.let { " errorType=$it" } ?: ""}"
+                "phase=$phase inputTokens=$lastPromptTokens outputTokens=$lastOutputTokens durationMs=$lastGenerationMs outcome=$outcome${cancellationReason?.let { " cancelReason=$it" } ?: ""}${failureType?.let { " errorType=$it" } ?: ""}"
             )
+            currentGenerationPhase = null
         }
     }
 

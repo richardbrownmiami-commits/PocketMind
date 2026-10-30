@@ -17,6 +17,7 @@ import com.pocketmind.PocketMindApplication
 import com.pocketmind.R
 import com.pocketmind.engine.ModelStore
 import com.pocketmind.tools.AppLog
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -41,7 +42,10 @@ class ModelsFragment : Fragment(R.layout.fragment_models) {
     private val store by lazy(LazyThreadSafetyMode.NONE) { ModelStore(requireContext().applicationContext) }
     private val controller get() = (requireActivity().application as PocketMindApplication).agentController
     private val picker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-        if (uri != null) import(uri) else AppLog.info(requireContext(), "MODEL_IMPORT_PICKER_CANCELLED", "type=GGUF")
+        if (uri != null) {
+            AppLog.info(requireContext(), "MODEL_IMPORT_PICKER_RESULT", "type=GGUF outcome=selected")
+            import(uri)
+        } else AppLog.info(requireContext(), "MODEL_IMPORT_PICKER_CANCELLED", "type=GGUF")
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
@@ -50,6 +54,7 @@ class ModelsFragment : Fragment(R.layout.fragment_models) {
         viewScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         val modelAdapter = ModelAdapter(
             onSelect = { model ->
+                AppLog.info(requireContext(), "UI_CONTROL_TAPPED", "screen=models control=select_model")
                 store.select(model.file)
                 AppLog.info(requireContext(), "MODEL_SELECTED", "type=GGUF")
                 views?.message?.text = getString(R.string.model_selected, model.file.name)
@@ -75,7 +80,9 @@ class ModelsFragment : Fragment(R.layout.fragment_models) {
             picker.launch(arrayOf("application/octet-stream", "application/*", "*/*"))
         }
         views?.loadButton?.setOnClickListener {
-            if (isLoadedSelection()) unload() else loadSelected()
+            val loaded = isLoadedSelection()
+            AppLog.info(requireContext(), "UI_CONTROL_TAPPED", "screen=models control=${if (loaded) "unload_model" else "load_model"}")
+            if (loaded) unload() else loadSelected()
         }
         refresh()
     }
@@ -91,7 +98,8 @@ class ModelsFragment : Fragment(R.layout.fragment_models) {
                 AppLog.info(context, "MODEL_IMPORT_COMPLETED", "type=GGUF success=true sizeBytes=${file.length()}")
                 views?.message?.text = getString(R.string.model_imported, file.name)
             } catch (e: Exception) {
-                AppLog.error(context, "MODEL_IMPORT_FAILED", e, "type=GGUF")
+                val outcome = if (e is CancellationException) "cancelled" else "failed"
+                AppLog.error(context, "MODEL_IMPORT_FAILED", e, "type=GGUF outcome=$outcome")
                 views?.message?.text = e.message ?: getString(R.string.model_import_failed)
             } finally {
                 views?.progress?.visibility = View.GONE
@@ -104,6 +112,7 @@ class ModelsFragment : Fragment(R.layout.fragment_models) {
         val activeViews = views ?: return
         val entries = store.list()
         val selectedPath = store.selected()?.absolutePath
+        AppLog.info(requireContext(), "MODEL_LIST_REFRESHED", "count=${entries.size} selected=${selectedPath != null} loaded=${isLoadedSelection()}")
         adapter?.submit(entries, selectedPath)
         activeViews.emptyState.visibility = if (entries.isEmpty()) View.VISIBLE else View.GONE
         activeViews.status.text = controller.status()
@@ -125,30 +134,54 @@ class ModelsFragment : Fragment(R.layout.fragment_models) {
     private fun loadSelected() {
         if (store.selected() == null) {
             views?.message?.setText(R.string.select_model_first)
+            AppLog.info(requireContext(), "MODEL_LOAD_IGNORED", "reason=no_selection")
             return
         }
         views?.message?.setText(R.string.loading_model)
         AppLog.info(requireContext(), "MODEL_LOAD_REQUESTED", "type=GGUF")
+        val selectedPath = store.selected()?.absolutePath
         viewScope?.launch {
-            val result = controller.loadSelectedModel()
-            views?.message?.text = result
-            refresh()
+            try {
+                val result = controller.loadSelectedModel()
+                val loaded = selectedPath?.let(controller::isModelLoaded) == true
+                AppLog.info(requireContext(), "MODEL_LOAD_FINISHED", "type=GGUF outcome=${if (loaded) "success" else "failed"}")
+                views?.message?.text = result
+                refresh()
+            } catch (e: CancellationException) {
+                AppLog.info(requireContext(), "MODEL_LOAD_FINISHED", "type=GGUF outcome=cancelled")
+                throw e
+            } catch (e: Exception) {
+                AppLog.error(requireContext(), "MODEL_LOAD_FAILED", e, "type=GGUF")
+                throw e
+            }
         }
     }
 
     private fun unload() {
         AppLog.info(requireContext(), "MODEL_UNLOAD_REQUESTED_FROM_UI", "type=GGUF")
         viewScope?.launch {
-            val result = controller.unload()
-            views?.message?.text = result
-            refresh()
+            try {
+                val result = controller.unload()
+                AppLog.info(requireContext(), "MODEL_UNLOAD_FINISHED", "type=GGUF loaded=${controller.status().startsWith("Model loaded")}")
+                views?.message?.text = result
+                refresh()
+            } catch (e: CancellationException) {
+                AppLog.info(requireContext(), "MODEL_UNLOAD_FINISHED", "type=GGUF outcome=cancelled")
+                throw e
+            } catch (e: Exception) {
+                AppLog.error(requireContext(), "MODEL_UNLOAD_FAILED", e, "type=GGUF")
+                throw e
+            }
         }
     }
 
     private fun showModelOptions(model: ModelStore.Model) {
+        AppLog.info(requireContext(), "MODEL_OPTIONS_OPENED", "type=GGUF")
         val dialog = BottomSheetDialog(requireContext())
         val content = layoutInflater.inflate(R.layout.bottom_sheet_model_actions, null)
+        dialog.setOnDismissListener { AppLog.info(requireContext(), "MODEL_OPTIONS_DISMISSED", "type=GGUF") }
         content.findViewById<MaterialButton>(R.id.delete_model_button).setOnClickListener {
+            AppLog.info(requireContext(), "UI_CONTROL_TAPPED", "screen=models control=delete_model")
             dialog.dismiss()
             confirmDelete(model.file)
         }
@@ -158,29 +191,43 @@ class ModelsFragment : Fragment(R.layout.fragment_models) {
 
     private fun confirmDelete(file: java.io.File) {
         if (controller.isModelLoaded(file.absolutePath)) {
+            AppLog.warn(requireContext(), "MODEL_DELETE_BLOCKED", "type=GGUF reason=model_loaded")
             showLoadedDeleteError()
             return
         }
+        AppLog.info(requireContext(), "MODEL_DELETE_CONFIRMATION_SHOWN", "type=GGUF")
         MaterialAlertDialogBuilder(requireContext())
             .setTitle(R.string.delete_model_title)
             .setMessage(getString(R.string.delete_model_message, file.name))
-            .setNegativeButton(R.string.cancel, null)
+            .setNegativeButton(R.string.cancel) { _, _ -> AppLog.info(requireContext(), "MODEL_DELETE_CONFIRMATION_RESULT", "type=GGUF outcome=cancelled") }
             .setPositiveButton(R.string.delete) { _, _ ->
+                AppLog.info(requireContext(), "MODEL_DELETE_CONFIRMATION_RESULT", "type=GGUF outcome=confirmed")
                 if (controller.isModelLoaded(file.absolutePath)) {
+                    AppLog.warn(requireContext(), "MODEL_DELETE_BLOCKED", "type=GGUF reason=model_loaded_at_confirmation")
                     showLoadedDeleteError()
                 } else {
                     AppLog.info(requireContext(), "MODEL_DELETE_REQUESTED", "type=GGUF")
+                    val appContext = requireContext().applicationContext
                     viewScope?.launch {
-                        val deleted = withContext(Dispatchers.IO) { store.delete(file) }
-                        AppLog.info(requireContext(), "MODEL_DELETE_FINISHED", "type=GGUF success=$deleted")
-                        views?.message?.text = getString(
-                            if (deleted) R.string.model_deleted else R.string.model_delete_failed,
-                            file.name
-                        )
-                        refresh()
+                        try {
+                            val deleted = withContext(Dispatchers.IO) { store.delete(file) }
+                            AppLog.info(appContext, "MODEL_DELETE_FINISHED", "type=GGUF outcome=${if (deleted) "deleted" else "not_found"}")
+                            views?.message?.text = getString(
+                                if (deleted) R.string.model_deleted else R.string.model_delete_failed,
+                                file.name
+                            )
+                            refresh()
+                        } catch (e: CancellationException) {
+                            AppLog.info(appContext, "MODEL_DELETE_FINISHED", "type=GGUF outcome=cancelled")
+                            throw e
+                        } catch (e: Exception) {
+                            AppLog.error(appContext, "MODEL_DELETE_FAILED", e, "type=GGUF")
+                            throw e
+                        }
                     }
                 }
             }
+            .setOnCancelListener { AppLog.info(requireContext(), "MODEL_DELETE_CONFIRMATION_RESULT", "type=GGUF outcome=dismissed") }
             .show()
     }
 
@@ -194,6 +241,7 @@ class ModelsFragment : Fragment(R.layout.fragment_models) {
     }
 
     override fun onDestroyView() {
+        AppLog.info(requireContext(), "MODEL_SCREEN_TASKS_CANCELLED", "reason=view_destroyed")
         viewScope?.cancel()
         viewScope = null
         views = null

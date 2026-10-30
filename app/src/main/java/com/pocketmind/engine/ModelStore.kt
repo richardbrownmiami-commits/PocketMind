@@ -3,6 +3,7 @@ package com.pocketmind.engine
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import com.pocketmind.tools.AppLog
 import java.io.File
 import java.io.FileOutputStream
 
@@ -14,20 +15,26 @@ class ModelStore(context: Context) {
 
     data class Model(val file: File, val bytes: Long)
 
-    fun list(): List<Model> = directory.listFiles { f -> f.isFile && f.extension.equals("gguf", true) }
-        .orEmpty().sortedBy { it.name.lowercase() }.map { Model(it, it.length()) }
-
-    fun selected(): File? = prefs.getString("selected", null)?.let(::File)?.takeIf { it.isFile }
-
-    fun select(file: File) {
-        require(file.parentFile?.canonicalFile == directory.canonicalFile && file.extension.equals("gguf", true))
-        prefs.edit().putString("selected", file.absolutePath).apply()
+    fun list(): List<Model> = AppLog.databaseOperation("models", "list", { "count=${it.size}" }) {
+        directory.listFiles { f -> f.isFile && f.extension.equals("gguf", true) }
+            .orEmpty().sortedBy { it.name.lowercase() }.map { Model(it, it.length()) }
     }
 
-    fun delete(file: File): Boolean {
+    fun selected(): File? = AppLog.databaseOperation("models", "selected", { "present=${it != null}" }) {
+        prefs.getString("selected", null)?.let(::File)?.takeIf { it.isFile }
+    }
+
+    fun select(file: File) {
+        AppLog.databaseOperation("models", "select") {
+            require(file.parentFile?.canonicalFile == directory.canonicalFile && file.extension.equals("gguf", true))
+            prefs.edit().putString("selected", file.absolutePath).apply()
+        }
+    }
+
+    fun delete(file: File): Boolean = AppLog.databaseOperation("models", "delete", { "deleted=$it" }) {
         val target = file.canonicalFile
         require(target.parentFile == directory.canonicalFile && target.extension.equals("gguf", true))
-        if (!target.isFile) return false
+        if (!target.isFile) return@databaseOperation false
         val deleted = target.delete()
         if (deleted) {
             val selectedPath = prefs.getString("selected", null)
@@ -35,11 +42,11 @@ class ModelStore(context: Context) {
                 prefs.edit().remove("selected").apply()
             }
         }
-        return deleted
+        deleted
     }
 
     @Throws(Exception::class)
-    fun import(uri: Uri): File {
+    fun import(uri: Uri): File = AppLog.databaseOperation("models", "import", { "bytes=${it.length()}" }) {
         val resolver = app.contentResolver
         val displayName = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
             if (c.moveToFirst()) c.getString(0) else null
@@ -71,6 +78,6 @@ class ModelStore(context: Context) {
             throw e
         }
         select(target)
-        return target
+        target
     }
 }

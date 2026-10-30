@@ -14,6 +14,7 @@ import com.pocketmind.R
 import com.pocketmind.engine.ModelStore
 import com.pocketmind.engine.RwkvEngine
 import com.pocketmind.tools.AppLog
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -29,7 +30,10 @@ class RwkvFragment : Fragment() {
     private var loadButton: MaterialButton? = null
 
     private val picker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-        if (uri != null) importRwkv(uri) else AppLog.info(requireContext(), "MODEL_IMPORT_PICKER_CANCELLED", "type=RWKV")
+        if (uri != null) {
+            AppLog.info(requireContext(), "MODEL_IMPORT_PICKER_RESULT", "type=RWKV outcome=selected")
+            importRwkv(uri)
+        } else AppLog.info(requireContext(), "MODEL_IMPORT_PICKER_CANCELLED", "type=RWKV")
     }
 
     override fun onCreateView(inflater: android.view.LayoutInflater, container: android.view.ViewGroup?, savedInstanceState: Bundle?): View {
@@ -64,6 +68,7 @@ class RwkvFragment : Fragment() {
         val importButton = MaterialButton(requireContext()).apply {
             text = getString(R.string.rwkv_import)
             setOnClickListener {
+                AppLog.info(requireContext(), "UI_CONTROL_TAPPED", "screen=rwkv control=import_model")
                 AppLog.info(requireContext(), "MODEL_IMPORT_PICKER_OPENED", "type=RWKV")
                 picker.launch(arrayOf("application/octet-stream", "application/*", "*/*"))
             }
@@ -72,7 +77,10 @@ class RwkvFragment : Fragment() {
 
         loadButton = MaterialButton(requireContext()).apply {
             text = getString(R.string.load_model)
-            setOnClickListener { loadSelected() }
+            setOnClickListener {
+                AppLog.info(requireContext(), "UI_CONTROL_TAPPED", "screen=rwkv control=load_model")
+                loadSelected()
+            }
         }
         cardContent.addView(loadButton)
         card.addView(cardContent)
@@ -102,7 +110,8 @@ class RwkvFragment : Fragment() {
                     status?.text = getString(R.string.rwkv_imported, file.name)
                 }
             } catch (e: Exception) {
-                AppLog.error(requireContext(), "MODEL_IMPORT_FAILED", e, "type=RWKV")
+                val outcome = if (e is CancellationException) "cancelled" else "failed"
+                AppLog.error(requireContext(), "MODEL_IMPORT_FAILED", e, "type=RWKV outcome=$outcome")
                 status?.text = e.message ?: getString(R.string.rwkv_import_failed)
             }
             refresh()
@@ -112,25 +121,38 @@ class RwkvFragment : Fragment() {
     private fun loadSelected() {
         val file = store.selected()
         if (file == null || !RwkvEngine.isCompatible(file)) {
+            AppLog.info(requireContext(), "RWKV_LOAD_IGNORED", "reason=no_compatible_selection")
             status?.setText(R.string.rwkv_select_first)
             return
         }
         status?.setText(R.string.rwkv_loading)
         AppLog.info(requireContext(), "MODEL_LOAD_REQUESTED", "type=RWKV")
         scope?.launch {
-            status?.text = controller.loadSelectedModel()
-            refresh()
+            try {
+                status?.text = controller.loadSelectedModel()
+                AppLog.info(requireContext(), "RWKV_LOAD_FINISHED", "loaded=${controller.isModelLoaded(file.absolutePath)}")
+                refresh()
+            } catch (e: CancellationException) {
+                AppLog.info(requireContext(), "RWKV_LOAD_FINISHED", "outcome=cancelled")
+                throw e
+            } catch (e: Exception) {
+                AppLog.error(requireContext(), "RWKV_LOAD_FAILED", e)
+                throw e
+            }
         }
     }
 
     private fun refresh() {
         val file = store.selected()
+        val compatible = file != null && RwkvEngine.isCompatible(file)
+        val loaded = file != null && controller.isModelLoaded(file.absolutePath)
+        AppLog.info(requireContext(), "RWKV_STATE_REFRESHED", "selected=${file != null} compatible=$compatible loaded=$loaded")
         status?.text = when {
             file == null -> getString(R.string.rwkv_no_model)
-            !RwkvEngine.isCompatible(file) -> getString(R.string.rwkv_wrong_selected, file.name)
+            !compatible -> getString(R.string.rwkv_wrong_selected, file.name)
             else -> getString(R.string.rwkv_selected, file.name) + "\n" + controller.status()
         }
-        loadButton?.isEnabled = file != null && RwkvEngine.isCompatible(file)
+        loadButton?.isEnabled = file != null && compatible
     }
 
     override fun onResume() {
@@ -139,6 +161,7 @@ class RwkvFragment : Fragment() {
     }
 
     override fun onDestroyView() {
+        AppLog.info(requireContext(), "RWKV_SCREEN_TASKS_CANCELLED", "reason=view_destroyed")
         scope?.cancel()
         scope = null
         status = null
