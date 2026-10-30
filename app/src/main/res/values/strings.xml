@@ -4,6 +4,7 @@
     <string name="nav_models">Models</string>
     <string name="nav_memory">Memory</string>
     <string name="nav_rwkv">RWKV</string>
+    <string name="nav_settings">Settings</string>
     <string name="menu_about">About</string>
     <string name="menu_export_logs">Export diagnostics log</string>
     <string name="menu_clear_memory">Clear memory</string>
@@ -29,7 +30,7 @@
     <string name="model_deleted">Deleted %1$s.</string>
     <string name="model_delete_failed">Could not delete %1$s.</string>
     <string name="select_model_first">Select a model before loading it.</string>
-    <string name="loading_model">Loading model with memory-safe settings…</string>
+    <string name="loading_model">Loading model with the selected context and CPU threads…</string>
     <string name="importing_model">Copying model to private app storage…</string>
     <string name="model_imported">Imported and selected %1$s.</string>
     <string name="model_import_failed">Model import failed.</string>
@@ -65,4 +66,26 @@
     <string name="rwkv_no_model">No RWKV model selected.</string>
     <string name="rwkv_wrong_selected">Selected file is not an RWKV GGUF model: %1$s</string>
     <string name="rwkv_selected">Selected RWKV model: %1$s</string>
+    <string name="inference_settings_title">Inference settings</string>
+    <string name="inference_settings_description">Choose how llama.cpp formats prompts and samples generated tokens.</string>
+    <string name="inference_temperature">Temperature</string>
+    <string name="inference_temperature_help">Lower values are steadier; higher values allow more variation (0.1–2.0).</string>
+    <string name="inference_top_k">Top-k</string>
+    <string name="inference_top_k_help">Limit each token choice to the top k candidates (1–100).</string>
+    <string name="inference_top_p">Top-p</string>
+    <string name="inference_top_p_help">Nucleus sampling threshold (0.05–1.00).</string>
+    <string name="inference_prompt_template">Prompt template</string>
+    <string name="inference_context">Context window (tokens)</string>
+    <string name="inference_cpu_threads">CPU threads</string>
+    <string name="inference_cpu_threads_help">Choose how many CPU threads llama.cpp uses for model evaluation.</string>
+    <string name="inference_reload_help">Temperature, top-k, top-p, and template affect the next response. Context and CPU threads take effect the next time you load the model; unload and load it again from Models to apply them.</string>
+    <string name="inference_save">Save settings</string>
+    <string name="inference_saved_message">Settings saved. Sampling and template changes apply to the next response; context and CPU threads apply on the next model load.</string>
+    <string-array name="inference_prompt_templates">
+        <item>Model default (GGUF)</item>
+        <item>Plain text</item>
+        <item>ChatML</item>
+        <item>Llama 3</item>
+        <item>Gemma</item>
+    </string-array>
 </resources>

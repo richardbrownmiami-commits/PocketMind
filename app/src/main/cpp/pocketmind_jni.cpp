@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -148,6 +149,33 @@ bool decodeOne(llama_batch &batch, llama_token token, llama_pos position) {
     batch.logits[0] = 1;
     return llama_decode(g_context, batch) == 0;
 }
+
+std::string formatPlainPrompt(const std::string &system, const std::string &user) {
+    if (system.empty()) return user;
+    return system + "\nUser question: " + user + "\nAssistant:";
+}
+
+std::string formatModelPrompt(const std::string &system, const std::string &user) {
+    const char *tmpl = g_model == nullptr ? nullptr : llama_model_chat_template(g_model, nullptr);
+    if (tmpl == nullptr) return formatPlainPrompt(system, user);
+
+    std::vector<llama_chat_message> messages;
+    if (!system.empty()) messages.push_back({"system", system.c_str()});
+    if (!user.empty() || messages.empty()) messages.push_back({"user", user.c_str()});
+
+    const size_t capacity = std::max<size_t>(256, (system.size() + user.size() + 64) * 2);
+    std::vector<char> buffer(capacity);
+    int32_t size = llama_chat_apply_template(tmpl, messages.data(), messages.size(), true,
+                                              buffer.data(), static_cast<int32_t>(buffer.size()));
+    if (size < 0) return formatPlainPrompt(system, user);
+    if (static_cast<size_t>(size) > buffer.size()) {
+        buffer.resize(static_cast<size_t>(size) + 1);
+        size = llama_chat_apply_template(tmpl, messages.data(), messages.size(), true,
+                                         buffer.data(), static_cast<int32_t>(buffer.size()));
+    }
+    if (size < 0 || static_cast<size_t>(size) > buffer.size()) return formatPlainPrompt(system, user);
+    return std::string(buffer.data(), static_cast<size_t>(size));
+}
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -160,7 +188,7 @@ Java_com_pocketmind_engine_LlamaEngine_nativeLoad(JNIEnv *env, jobject, jstring 
     if (static_cast<uint64_t>(st.st_size) > kMaxModelBytes) {
         throwJava(env, "Model exceeds the 1.2 GB limit", "java/lang/IllegalArgumentException"); return;
     }
-    if (nCtx < 128 || nCtx > 1024 || nBatch < 32 || nUbatch < 16 || nUbatch > nBatch || threads < 1 || threads > 4) {
+    if (nCtx < 128 || nCtx > 1024 || nBatch < 32 || nUbatch < 16 || nUbatch > nBatch || threads < 1 || threads > 8) {
         throwJava(env, "Invalid context, batch, or thread settings", "java/lang/IllegalArgumentException"); return;
     }
     if (g_context != nullptr) { llama_free(g_context); g_context = nullptr; }
@@ -186,9 +214,45 @@ Java_com_pocketmind_engine_LlamaEngine_nativeLoad(JNIEnv *env, jobject, jstring 
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_pocketmind_engine_LlamaEngine_nativeGenerate(JNIEnv *env, jobject, jstring jprompt, jint maxTokens, jstring jgrammar, jobject sink) {
+Java_com_pocketmind_engine_LlamaEngine_nativeFormatPrompt(JNIEnv *env, jobject, jstring jsystem, jstring juser, jint templateId) {
+    if (g_model == nullptr || g_context == nullptr) { throwJava(env, "Load a GGUF model before formatting its prompt"); return nullptr; }
+    if (templateId < 0 || templateId > 4) { throwJava(env, "Unknown prompt template", "java/lang/IllegalArgumentException"); return nullptr; }
+
+    const std::string system = toUtf8(env, jsystem);
+    const std::string user = toUtf8(env, juser);
+    std::string prompt;
+    switch (templateId) {
+        case 0:
+            prompt = formatModelPrompt(system, user);
+            break;
+        case 1:
+            prompt = formatPlainPrompt(system, user);
+            break;
+        case 2:
+            if (!system.empty()) prompt += "<|im_start|>system\n" + system + "<|im_end|>\n";
+            prompt += "<|im_start|>user\n" + user + "<|im_end|>\n<|im_start|>assistant\n";
+            break;
+        case 3:
+            if (!system.empty()) prompt += "<|start_header_id|>system<|end_header_id|>\n\n" + system + "<|eot_id|>";
+            prompt += "<|start_header_id|>user<|end_header_id|>\n\n" + user +
+                      "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n";
+            break;
+        case 4:
+            prompt = "<bos><start_of_turn>user\n";
+            if (!system.empty()) prompt += system + "\n\n";
+            prompt += user + "<end_of_turn>\n<start_of_turn>model\n";
+            break;
+    }
+    return newJavaString(env, prompt);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_pocketmind_engine_LlamaEngine_nativeGenerate(JNIEnv *env, jobject, jstring jprompt, jint maxTokens, jstring jgrammar, jfloat temperature, jint topK, jfloat topP, jobject sink) {
     if (g_model == nullptr || g_context == nullptr) { throwJava(env, "Load a GGUF model first"); return nullptr; }
-    if (maxTokens < 1 || maxTokens > 512 || sink == nullptr) { throwJava(env, "Invalid generation request", "java/lang/IllegalArgumentException"); return nullptr; }
+    if (maxTokens < 1 || maxTokens > 512 || sink == nullptr || !std::isfinite(temperature) || temperature < 0.1f || temperature > 2.0f ||
+        topK < 1 || topK > 100 || !std::isfinite(topP) || topP < 0.05f || topP > 1.0f) {
+        throwJava(env, "Invalid generation or sampler settings", "java/lang/IllegalArgumentException"); return nullptr;
+    }
     bool expected = false;
     if (!g_generating.compare_exchange_strong(expected, true)) { throwJava(env, "A generation is already in progress"); return nullptr; }
     struct Reset { ~Reset() { g_generating.store(false); } } reset;
@@ -238,9 +302,9 @@ Java_com_pocketmind_engine_LlamaEngine_nativeGenerate(JNIEnv *env, jobject, jstr
         llama_sampler_chain_add(sampler, grammarSampler);
         llama_sampler_chain_add(sampler, llama_sampler_init_greedy());
     } else {
-        llama_sampler_chain_add(sampler, llama_sampler_init_top_k(40));
-        llama_sampler_chain_add(sampler, llama_sampler_init_top_p(0.9f, 1));
-        llama_sampler_chain_add(sampler, llama_sampler_init_temp(0.7f));
+        llama_sampler_chain_add(sampler, llama_sampler_init_top_k(topK));
+        llama_sampler_chain_add(sampler, llama_sampler_init_top_p(topP, 1));
+        llama_sampler_chain_add(sampler, llama_sampler_init_temp(temperature));
         llama_sampler_chain_add(sampler, llama_sampler_init_dist(42));
     }
 

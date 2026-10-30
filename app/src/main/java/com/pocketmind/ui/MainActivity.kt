@@ -62,6 +62,7 @@ class MainActivity : AppCompatActivity() {
             R.id.nav_models -> TAG_MODELS
             R.id.nav_rwkv -> TAG_RWKV
             R.id.nav_memory -> TAG_MEMORY
+            R.id.nav_settings -> TAG_SETTINGS
             else -> return false
         }
         val current = supportFragmentManager.findFragmentById(R.id.fragment_container)
@@ -70,6 +71,7 @@ class MainActivity : AppCompatActivity() {
             TAG_CHAT -> ChatFragment()
             TAG_MODELS -> ModelsFragment()
             TAG_RWKV -> RwkvFragment()
+            TAG_SETTINGS -> InferenceSettingsFragment()
             else -> MemoryFragment()
         }
         current?.exitTransition = MaterialFadeThrough().apply { duration = TRANSITION_DURATION_MS }
@@ -93,6 +95,7 @@ class MainActivity : AppCompatActivity() {
             TAG_MODELS -> R.id.nav_models
             TAG_RWKV -> R.id.nav_rwkv
             TAG_MEMORY -> R.id.nav_memory
+            TAG_SETTINGS -> R.id.nav_settings
             else -> return
         }
         if (bottomNavigation.selectedItemId != selectedId) bottomNavigation.selectedItemId = selectedId
@@ -171,5 +174,6 @@ class MainActivity : AppCompatActivity() {
         private const val TAG_MODELS = "models"
         private const val TAG_RWKV = "rwkv"
         private const val TAG_MEMORY = "memory"
+        private const val TAG_SETTINGS = "settings"
     }
 }
