@@ -300,13 +300,11 @@ Java_com_pocketmind_engine_LlamaEngine_nativeGenerate(JNIEnv *env, jobject, jstr
             llama_sampler_free(sampler); llama_batch_free(batch); throwJava(env, "Planner grammar is invalid", "java/lang/IllegalArgumentException"); return nullptr;
         }
         llama_sampler_chain_add(sampler, grammarSampler);
-        llama_sampler_chain_add(sampler, llama_sampler_init_greedy());
-    } else {
-        llama_sampler_chain_add(sampler, llama_sampler_init_top_k(topK));
-        llama_sampler_chain_add(sampler, llama_sampler_init_top_p(topP, 1));
-        llama_sampler_chain_add(sampler, llama_sampler_init_temp(temperature));
-        llama_sampler_chain_add(sampler, llama_sampler_init_dist(42));
     }
+    llama_sampler_chain_add(sampler, llama_sampler_init_top_k(topK));
+    llama_sampler_chain_add(sampler, llama_sampler_init_top_p(topP, 1));
+    llama_sampler_chain_add(sampler, llama_sampler_init_temp(temperature));
+    llama_sampler_chain_add(sampler, llama_sampler_init_dist(42));
 
     std::string generated;
     std::string pendingUtf8;
