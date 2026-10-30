@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="$ROOT/vendor/llama.cpp"
-PIN="ba0ba54d93b25faf1e149f4ccedd3e9d84798563"
+PIN="36a0e2ffc0b352b774f8d71c43668b75b3061ef5"
 URL="https://github.com/ggml-org/llama.cpp.git"
 
 if [[ -d "$DEST/.git" ]]; then
