@@ -13,11 +13,13 @@ import com.pocketmind.R
 import com.pocketmind.engine.InferenceSettings
 import com.pocketmind.engine.InferenceSettingsStore
 import com.pocketmind.engine.PromptTemplate
+import com.pocketmind.tools.AppLog
 import java.util.Locale
 
 class InferenceSettingsFragment : Fragment(R.layout.fragment_inference_settings) {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+        AppLog.info(requireContext(), "INFERENCE_SETTINGS_SCREEN_OPENED")
         val store = InferenceSettingsStore(requireContext())
         val saved = store.load()
 
@@ -110,6 +112,11 @@ class InferenceSettingsFragment : Fragment(R.layout.fragment_inference_settings)
                     promptTemplate = promptTemplate,
                     customPromptTemplate = customPromptTemplate
                 )
+            )
+            AppLog.info(
+                requireContext(),
+                "INFERENCE_SETTINGS_SAVED",
+                "temperature=${temperatureSlider.value} topK=${topKSlider.value.toInt()} topP=${topPSlider.value} contextTokens=$contextTokens cpuThreads=$cpuThreads template=${promptTemplate.name} customTemplateCharacters=${customPromptTemplate.length}"
             )
             view.findViewById<TextView>(R.id.inference_settings_message)
                 .setText(R.string.inference_saved_message)

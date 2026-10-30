@@ -13,6 +13,7 @@ import com.pocketmind.PocketMindApplication
 import com.pocketmind.R
 import com.pocketmind.engine.ModelStore
 import com.pocketmind.engine.RwkvEngine
+import com.pocketmind.tools.AppLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -28,7 +29,7 @@ class RwkvFragment : Fragment() {
     private var loadButton: MaterialButton? = null
 
     private val picker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-        if (uri != null) importRwkv(uri)
+        if (uri != null) importRwkv(uri) else AppLog.info(requireContext(), "MODEL_IMPORT_PICKER_CANCELLED", "type=RWKV")
     }
 
     override fun onCreateView(inflater: android.view.LayoutInflater, container: android.view.ViewGroup?, savedInstanceState: Bundle?): View {
@@ -62,7 +63,10 @@ class RwkvFragment : Fragment() {
 
         val importButton = MaterialButton(requireContext()).apply {
             text = getString(R.string.rwkv_import)
-            setOnClickListener { picker.launch(arrayOf("application/octet-stream", "application/*", "*/*")) }
+            setOnClickListener {
+                AppLog.info(requireContext(), "MODEL_IMPORT_PICKER_OPENED", "type=RWKV")
+                picker.launch(arrayOf("application/octet-stream", "application/*", "*/*"))
+            }
         }
         cardContent.addView(importButton)
 
@@ -78,22 +82,27 @@ class RwkvFragment : Fragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+        AppLog.info(requireContext(), "RWKV_SCREEN_OPENED")
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         refresh()
     }
 
     private fun importRwkv(uri: Uri) {
+        AppLog.info(requireContext(), "MODEL_IMPORT_STARTED", "type=RWKV")
         status?.setText(R.string.rwkv_importing)
         scope?.launch {
             try {
                 val file = withContext(Dispatchers.IO) { store.import(uri) }
                 if (!RwkvEngine.isCompatible(file)) {
                     withContext(Dispatchers.IO) { store.delete(file) }
+                    AppLog.warn(requireContext(), "MODEL_IMPORT_REJECTED", "type=RWKV reason=incompatible_format")
                     status?.setText(R.string.rwkv_wrong_model)
                 } else {
+                    AppLog.info(requireContext(), "MODEL_IMPORT_COMPLETED", "type=RWKV success=true sizeBytes=${file.length()}")
                     status?.text = getString(R.string.rwkv_imported, file.name)
                 }
             } catch (e: Exception) {
+                AppLog.error(requireContext(), "MODEL_IMPORT_FAILED", e, "type=RWKV")
                 status?.text = e.message ?: getString(R.string.rwkv_import_failed)
             }
             refresh()
@@ -107,6 +116,7 @@ class RwkvFragment : Fragment() {
             return
         }
         status?.setText(R.string.rwkv_loading)
+        AppLog.info(requireContext(), "MODEL_LOAD_REQUESTED", "type=RWKV")
         scope?.launch {
             status?.text = controller.loadSelectedModel()
             refresh()

@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.view.Menu
 import android.view.MenuItem
+import android.view.View
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.google.android.material.appbar.MaterialToolbar
@@ -43,7 +44,15 @@ class MainActivity : AppCompatActivity() {
                 .commit()
         }
         bottomNavigation.setOnItemSelectedListener { item -> showTab(item.itemId) }
-        supportFragmentManager.addOnBackStackChangedListener { syncSelectedTab() }
+        supportFragmentManager.addOnBackStackChangedListener {
+            val current = supportFragmentManager.findFragmentById(R.id.fragment_container)
+            bottomNavigation.visibility = if (current?.tag == TAG_DEBUG_LOGGER) View.GONE else View.VISIBLE
+            AppLog.info(this, "NAVIGATION_STATE_CHANGED", "destination=${current?.tag ?: "none"} backStackEntries=${supportFragmentManager.backStackEntryCount}")
+            syncSelectedTab()
+        }
+        if (supportFragmentManager.findFragmentById(R.id.fragment_container)?.tag == TAG_DEBUG_LOGGER) {
+            bottomNavigation.visibility = View.GONE
+        }
     }
 
     override fun onStart() {
@@ -54,6 +63,16 @@ class MainActivity : AppCompatActivity() {
     override fun onStop() {
         AppLog.info(this, "ACTIVITY_STOP")
         super.onStop()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        AppLog.info(this, "ACTIVITY_RESUME")
+    }
+
+    override fun onPause() {
+        AppLog.info(this, "ACTIVITY_PAUSE")
+        super.onPause()
     }
 
     private fun showTab(itemId: Int): Boolean {
@@ -108,6 +127,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean = when (item.itemId) {
         R.id.menu_about -> {
+            AppLog.info(this, "ABOUT_DIALOG_OPENED")
             MaterialAlertDialogBuilder(this)
                 .setTitle(R.string.about_title)
                 .setMessage(R.string.about_message)
@@ -119,11 +139,27 @@ class MainActivity : AppCompatActivity() {
             exportLogs()
             true
         }
+        R.id.menu_debug_logger -> {
+            openDebugLogger()
+            true
+        }
         R.id.menu_clear_memory -> {
             MemoryFragment.confirmClearMemory(this) { clearMemoryFromToolbar() }
             true
         }
         else -> super.onOptionsItemSelected(item)
+    }
+
+    private fun openDebugLogger() {
+        val current = supportFragmentManager.findFragmentById(R.id.fragment_container)
+        if (current?.tag == TAG_DEBUG_LOGGER) return
+        AppLog.info(this, "DEBUG_LOG_VIEW_REQUESTED")
+        supportFragmentManager.beginTransaction()
+            .setReorderingAllowed(true)
+            .replace(R.id.fragment_container, DebugLogFragment(), TAG_DEBUG_LOGGER)
+            .addToBackStack(TAG_DEBUG_LOGGER)
+            .commit()
+        bottomNavigation.visibility = View.GONE
     }
 
     private fun exportLogs() {
@@ -153,11 +189,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun clearMemoryFromToolbar() {
         val appContext = applicationContext
+        AppLog.info(appContext, "MEMORY_CLEAR_STARTED", "source=toolbar")
         uiScope.launch {
             withContext(Dispatchers.IO) {
                 val db = AppDatabase(appContext)
                 try { clearMemory(db) } finally { db.close() }
             }
+            AppLog.info(appContext, "MEMORY_CLEAR_FINISHED", "source=toolbar")
             (supportFragmentManager.findFragmentById(R.id.fragment_container) as? MemoryFragment)?.refresh()
         }
     }
@@ -175,5 +213,6 @@ class MainActivity : AppCompatActivity() {
         private const val TAG_RWKV = "rwkv"
         private const val TAG_MEMORY = "memory"
         private const val TAG_SETTINGS = "settings"
+        private const val TAG_DEBUG_LOGGER = "debug_logger"
     }
 }

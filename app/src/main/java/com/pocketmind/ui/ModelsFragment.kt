@@ -16,6 +16,7 @@ import com.google.android.material.snackbar.Snackbar
 import com.pocketmind.PocketMindApplication
 import com.pocketmind.R
 import com.pocketmind.engine.ModelStore
+import com.pocketmind.tools.AppLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -40,15 +41,17 @@ class ModelsFragment : Fragment(R.layout.fragment_models) {
     private val store by lazy(LazyThreadSafetyMode.NONE) { ModelStore(requireContext().applicationContext) }
     private val controller get() = (requireActivity().application as PocketMindApplication).agentController
     private val picker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-        if (uri != null) import(uri)
+        if (uri != null) import(uri) else AppLog.info(requireContext(), "MODEL_IMPORT_PICKER_CANCELLED", "type=GGUF")
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+        AppLog.info(requireContext(), "MODELS_SCREEN_OPENED", "type=GGUF")
         viewScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         val modelAdapter = ModelAdapter(
             onSelect = { model ->
                 store.select(model.file)
+                AppLog.info(requireContext(), "MODEL_SELECTED", "type=GGUF")
                 views?.message?.text = getString(R.string.model_selected, model.file.name)
                 refresh()
             },
@@ -68,6 +71,7 @@ class ModelsFragment : Fragment(R.layout.fragment_models) {
             loadButton = view.findViewById(R.id.load_model_button)
         )
         views?.importButton?.setOnClickListener {
+            AppLog.info(requireContext(), "MODEL_IMPORT_PICKER_OPENED", "type=GGUF")
             picker.launch(arrayOf("application/octet-stream", "application/*", "*/*"))
         }
         views?.loadButton?.setOnClickListener {
@@ -77,14 +81,17 @@ class ModelsFragment : Fragment(R.layout.fragment_models) {
     }
 
     private fun import(uri: Uri) {
+        AppLog.info(requireContext(), "MODEL_IMPORT_STARTED", "type=GGUF")
         views?.message?.text = getString(R.string.importing_model)
         views?.progress?.visibility = View.VISIBLE
         val context = requireContext().applicationContext
         viewScope?.launch {
             try {
                 val file = withContext(Dispatchers.IO) { store.import(uri) }
+                AppLog.info(context, "MODEL_IMPORT_COMPLETED", "type=GGUF success=true sizeBytes=${file.length()}")
                 views?.message?.text = getString(R.string.model_imported, file.name)
             } catch (e: Exception) {
+                AppLog.error(context, "MODEL_IMPORT_FAILED", e, "type=GGUF")
                 views?.message?.text = e.message ?: getString(R.string.model_import_failed)
             } finally {
                 views?.progress?.visibility = View.GONE
@@ -121,6 +128,7 @@ class ModelsFragment : Fragment(R.layout.fragment_models) {
             return
         }
         views?.message?.setText(R.string.loading_model)
+        AppLog.info(requireContext(), "MODEL_LOAD_REQUESTED", "type=GGUF")
         viewScope?.launch {
             val result = controller.loadSelectedModel()
             views?.message?.text = result
@@ -129,6 +137,7 @@ class ModelsFragment : Fragment(R.layout.fragment_models) {
     }
 
     private fun unload() {
+        AppLog.info(requireContext(), "MODEL_UNLOAD_REQUESTED_FROM_UI", "type=GGUF")
         viewScope?.launch {
             val result = controller.unload()
             views?.message?.text = result
@@ -160,8 +169,10 @@ class ModelsFragment : Fragment(R.layout.fragment_models) {
                 if (controller.isModelLoaded(file.absolutePath)) {
                     showLoadedDeleteError()
                 } else {
+                    AppLog.info(requireContext(), "MODEL_DELETE_REQUESTED", "type=GGUF")
                     viewScope?.launch {
                         val deleted = withContext(Dispatchers.IO) { store.delete(file) }
+                        AppLog.info(requireContext(), "MODEL_DELETE_FINISHED", "type=GGUF success=$deleted")
                         views?.message?.text = getString(
                             if (deleted) R.string.model_deleted else R.string.model_delete_failed,
                             file.name

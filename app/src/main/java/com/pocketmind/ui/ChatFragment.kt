@@ -20,6 +20,7 @@ import com.pocketmind.R
 import com.pocketmind.core.GenerationService
 import com.pocketmind.memory.AppDatabase
 import com.pocketmind.memory.MessageStore
+import com.pocketmind.tools.AppLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -74,11 +75,15 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
         )
         views = chatViews
         adapter = chatAdapter
+        AppLog.info(requireContext(), "CHAT_SCREEN_OPENED")
         chatViews.status.text = controller.status()
         chatViews.send.isEnabled = false
         updateSendButton(generationActive)
         chatViews.send.setOnClickListener {
-            if (generationActive) controller.stop() else submit()
+            if (generationActive) {
+                AppLog.info(requireContext(), "CHAT_STOP_REQUESTED")
+                controller.stop()
+            } else submit()
         }
         chatViews.input.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEND) {
@@ -99,6 +104,7 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
             }
             val activeViews = views ?: return@launch
             adapter?.replace(history)
+            AppLog.info(context, "CHAT_HISTORY_LOADED", "messages=${history.size}")
             activeViews.send.isEnabled = true
             updateSendButton(generationActive)
             scrollToBottom()
@@ -109,6 +115,7 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
         val activeViews = views ?: return
         val text = activeViews.input.text?.toString()?.trim().orEmpty()
         if (text.isEmpty() || !activeViews.send.isEnabled || generationActive) return
+        AppLog.info(requireContext(), "CHAT_MESSAGE_SUBMITTED", "characters=${text.length}")
         activeViews.input.setText("")
         adapter?.add("user", text, animateOnInsert = true)
         val answerRow = adapter?.add("assistant", "", thinking = true, timestampFinalized = false) ?: return
@@ -130,6 +137,7 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
         val uiUpdatePending = AtomicBoolean(false)
         var renderedLength = 0
         val firstToken = AtomicBoolean(false)
+        var requestOutcome = "success"
 
         fun scheduleStreamUpdate() {
             if (!uiUpdatePending.compareAndSet(false, true)) return
@@ -155,7 +163,10 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
                     scheduleStreamUpdate()
                 }
                 adapter?.update(answerRow, reply.text, reply.actions, time = reply.completedAtMillis)
+                AppLog.info(context, "CHAT_REPLY_READY", "actions=${reply.actions.size} responseCharacters=${reply.text.length}")
             } catch (e: Exception) {
+                requestOutcome = "failed"
+                AppLog.error(context, "CHAT_REQUEST_FAILED", e)
                 adapter?.update(answerRow, "PocketMind could not finish: ${e.message ?: "unexpected error"}", time = System.currentTimeMillis())
             } finally {
                 stopThinking()
@@ -167,6 +178,7 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
                     updateSendButton(false)
                 }
                 context.stopService(Intent(context, GenerationService::class.java))
+                AppLog.info(context, "CHAT_REQUEST_FINISHED", "outcome=$requestOutcome")
                 scrollToBottom()
             }
         }
@@ -232,6 +244,7 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
     }
 
     override fun onDestroyView() {
+        AppLog.info(requireContext(), "CHAT_SCREEN_DESTROYED", "generationActive=$generationActive")
         // The model call is owned by this view. If the view goes away, stop native
         // inference too; otherwise the cancelled coroutine can leave the JNI engine
         // running with no UI consumer, wasting CPU and delaying the next request.

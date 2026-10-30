@@ -17,6 +17,7 @@ import com.pocketmind.memory.TopicState
 import com.pocketmind.memory.TopicStateStore
 import com.pocketmind.tools.ActionResult
 import com.pocketmind.tools.ActionStatus
+import com.pocketmind.tools.AppLog
 import com.pocketmind.tools.PlanStep
 import com.pocketmind.tools.PlannerJson
 import com.pocketmind.tools.RuleEngine
@@ -169,6 +170,7 @@ class AgentController(context: Context) : Closeable {
         ensureOpen()
         val raw = text.trim()
         if (raw.isEmpty()) return@withContext AgentReply("Please enter a message.")
+        AppLog.info(app, "AGENT_REQUEST_RECEIVED", "characters=${raw.length}")
         lastUserFacingGenerationCompletedAtMillis = null
 
         val clarificationIntent = pendingClarification
@@ -184,6 +186,7 @@ class AgentController(context: Context) : Closeable {
                 val replyTime = userFacingReplyTimestamp()
                 val assistantId = messages.append("assistant", answer, replyTime)
                 indexRecall(assistantId, answer)
+                AppLog.info(app, "AGENT_REPLY_PATH", "path=clarification_action actions=${execution.results.size}")
                 return@withContext AgentReply(answer, execution.results, replyTime)
             }
             if (RuleEngine.looksLikeClarificationFollowUp(clarificationIntent.tool, raw)) {
@@ -194,9 +197,11 @@ class AgentController(context: Context) : Closeable {
                     "That volume level is invalid. Please reply with a number from 0 to 100 percent."
                 }
                 messages.append("assistant", answer)
+                AppLog.info(app, "AGENT_REPLY_PATH", "path=clarification_invalid")
                 return@withContext AgentReply(answer)
             }
             // A message unrelated to the requested argument is a new request, not a reason to hijack chat.
+            AppLog.info(app, "PENDING_CLARIFICATION_CLEARED", "reason=unrelated_request")
             pendingClarification = null
         }
 
@@ -206,24 +211,28 @@ class AgentController(context: Context) : Closeable {
             messages.append("user", raw)
             val answer = if (count > 0) "Forgot that saved information." else "I couldn't find a saved fact matching that."
             messages.append("assistant", answer)
+            AppLog.info(app, "AGENT_REPLY_PATH", "path=forget_memory deletedFacts=$count")
             return@withContext AgentReply(answer)
         }
         if (preferences.getBoolean("facts_enabled", true) && !Regex("(?i)^\\s*remember\\s+to\\b").containsMatchIn(raw) && facts.capture(raw)) {
             messages.append("user", raw)
             val answer = "I’ll remember that."
             messages.append("assistant", answer)
+            AppLog.info(app, "AGENT_REPLY_PATH", "path=fact_capture")
             return@withContext AgentReply(answer)
         }
         if (Regex("(?i)\\b(what do you remember|what do you know about me|list my facts)\\b").containsMatchIn(raw)) {
             val saved = facts.all()
             val answer = if (!preferences.getBoolean("facts_enabled", true)) "Fact memory is turned off." else if (saved.isEmpty()) "I don't have any saved facts." else saved.joinToString("\n") { "${it.key}: ${it.value}" }
             messages.append("user", raw); messages.append("assistant", answer)
+            AppLog.info(app, "AGENT_REPLY_PATH", "path=fact_memory_lookup enabled=${preferences.getBoolean("facts_enabled", true)} facts=${saved.size}")
             return@withContext AgentReply(answer)
         }
         if (Regex("(?i)\\b(what is|what's|tell me) my name\\b").containsMatchIn(raw)) {
             val name = if (preferences.getBoolean("facts_enabled", true)) facts.all().firstOrNull { it.key.equals("name", true) }?.value else null
             val answer = if (!preferences.getBoolean("facts_enabled", true)) "Fact memory is turned off." else name?.let { "Your name is $it." } ?: "I don't have your name saved."
             messages.append("user", raw); messages.append("assistant", answer)
+            AppLog.info(app, "AGENT_REPLY_PATH", "path=name_lookup enabled=${preferences.getBoolean("facts_enabled", true)} found=${name != null}")
             return@withContext AgentReply(answer)
         }
         val now = System.currentTimeMillis()
@@ -233,6 +242,7 @@ class AgentController(context: Context) : Closeable {
         val explicitHistoryRequest = ActionRequestPolicy.isActionHistoryRequest(raw)
         val explicitLiveSearchRequest = ActionRequestPolicy.isLiveSearchRequest(raw)
         val actionRequest = explicitHistoryRequest || explicitLiveSearchRequest || ActionRequestPolicy.looksLikeAction(raw, ruleMatched = rule != null)
+        AppLog.info(app, "AGENT_ROUTE_DECISION", "ruleMatched=${rule != null} actionRequest=$actionRequest actionHistory=$explicitHistoryRequest liveSearch=$explicitLiveSearchRequest")
         if (rule != null) {
             val userId = messages.append("user", raw)
             indexRecall(userId, raw)
@@ -244,6 +254,7 @@ class AgentController(context: Context) : Closeable {
                 val replyTime = userFacingReplyTimestamp()
                 val assistantId = messages.append("assistant", answer, replyTime)
                 indexRecall(assistantId, answer)
+                AppLog.info(app, "AGENT_REPLY_PATH", "path=rule_opt_out")
                 return@withContext AgentReply(answer, completedAtMillis = replyTime)
             }
             val execution = executeValidatedPlan(rule, raw, "rules")
@@ -252,6 +263,7 @@ class AgentController(context: Context) : Closeable {
             val assistantId = messages.append("assistant", answer, replyTime)
             indexRecall(assistantId, answer)
             updateTopic(raw, execution.results)
+            AppLog.info(app, "AGENT_REPLY_PATH", "path=rule_action actions=${execution.results.size}")
             return@withContext AgentReply(answer, execution.results, replyTime)
         }
 
@@ -269,6 +281,7 @@ class AgentController(context: Context) : Closeable {
             val replyTime = userFacingReplyTimestamp()
             messages.append("user", raw)
             messages.append("assistant", answer, replyTime)
+            AppLog.info(app, "AGENT_REPLY_PATH", "path=clarification_request pending=${clarificationTarget != null}")
             return@withContext AgentReply(answer, completedAtMillis = replyTime)
         }
 
@@ -282,6 +295,7 @@ class AgentController(context: Context) : Closeable {
             }
             if (actionRequest) recordPlanFailure(raw, answer, "router")
             messages.append("assistant", answer)
+            AppLog.info(app, "AGENT_REPLY_PATH", "path=no_model actionRequest=$actionRequest")
             return@withContext AgentReply(answer)
         }
         if (loadedPath != modelPath) {
@@ -291,6 +305,7 @@ class AgentController(context: Context) : Closeable {
                 val answer = if (actionRequest) actionPlanFailure("model loading", "the selected model could not be loaded. $loadResult") else loadResult
                 if (actionRequest) recordPlanFailure(raw, answer, "router")
                 messages.append("assistant", answer)
+                AppLog.info(app, "AGENT_REPLY_PATH", "path=model_load_failed actionRequest=$actionRequest")
                 return@withContext AgentReply(answer)
             }
         }
@@ -323,6 +338,7 @@ class AgentController(context: Context) : Closeable {
             val assistantId = messages.append("assistant", answer, replyTime)
             indexRecall(assistantId, answer)
             updateTopic(raw, execution.results)
+            AppLog.info(app, "AGENT_REPLY_PATH", "path=action_execution actions=${execution.results.size}")
             return@withContext AgentReply(answer, execution.results, replyTime)
         }
         val noPlanReply = planAttempt.failure
@@ -330,6 +346,7 @@ class AgentController(context: Context) : Closeable {
             recordPlanFailure(raw, noPlanReply, "planner")
             val assistantId = messages.append("assistant", noPlanReply)
             indexRecall(assistantId, noPlanReply)
+            AppLog.info(app, "AGENT_REPLY_PATH", "path=action_planning_failed")
             return@withContext AgentReply(noPlanReply)
         }
 
@@ -346,11 +363,12 @@ class AgentController(context: Context) : Closeable {
                 engine::countTokens
             ) { system, user -> engine.formatPrompt(system, user, promptSettings) }
         } catch (_: Exception) {
+            AppLog.warn(app, "AGENT_REPLY_PATH", "path=context_overflow")
             return@withContext AgentReply("That question is too long for the available model context. Please shorten it and try again.")
         }
         lastPromptTokens = fittedPrompt.tokens
         val prompt = fittedPrompt.prompt
-        val generatedResponse = generateOrNull(prompt, ANSWER_TOKENS, null, onToken)
+        val generatedResponse = generateOrNull(prompt, ANSWER_TOKENS, null, onToken, "chat_response")
         val response = generatedResponse ?: "Generation was stopped or failed."
         val replyTime = if (generatedResponse != null) lastGenerationCompletedAtMillis else System.currentTimeMillis()
         lastUserFacingGenerationCompletedAtMillis = generatedResponse?.let { replyTime }
@@ -358,6 +376,7 @@ class AgentController(context: Context) : Closeable {
         indexRecall(assistantId, response)
         rollSummary()
         updateTopic(raw, emptyList())
+        AppLog.info(app, "AGENT_REPLY_PATH", "path=chat_generation generated=${generatedResponse != null}")
         AgentReply(response, completedAtMillis = replyTime)
     }
 
@@ -368,26 +387,40 @@ class AgentController(context: Context) : Closeable {
     }
 
     private fun loadModel(path: String): String {
-        if (loadedPath == path) return "Model is already loaded."
+        if (loadedPath == path) {
+            AppLog.info(app, "MODEL_LOAD_SKIPPED", "reason=already_loaded")
+            return "Model is already loaded."
+        }
         unloadInternal()
         val settings = inferenceSettingsStore.load()
         val requestedContext = settings.contextTokens
         val threads = settings.cpuThreads
+        val startedAt = SystemClock.elapsedRealtime()
+        AppLog.info(app, "MODEL_LOAD_STARTED", "contextTokens=$requestedContext cpuThreads=$threads")
         return try {
             val batch = minOf(256, requestedContext)
             engine.load(path, nCtx = requestedContext, nBatch = batch, nUbatch = minOf(128, batch), threads = threads)
             loadedPath = path
             contextSize = requestedContext
+            AppLog.info(app, "MODEL_LOAD_COMPLETED", "success=true durationMs=${SystemClock.elapsedRealtime() - startedAt} contextTokens=$requestedContext cpuThreads=$threads")
             "Model loaded (${requestedContext}-token context, $threads CPU threads)."
         } catch (e: Throwable) {
             loadedPath = null
+            AppLog.warn(app, "MODEL_LOAD_FAILED", "errorType=${e::class.java.simpleName} durationMs=${SystemClock.elapsedRealtime() - startedAt}")
             "Could not load model: ${e.message?.take(180) ?: "native loader error"}"
         }
     }
 
-    suspend fun unload(): String = withContext(dispatcher) { unloadInternal(); "Model unloaded." }
+    suspend fun unload(): String = withContext(dispatcher) {
+        AppLog.info(app, "MODEL_UNLOAD_REQUESTED", "loaded=${loadedPath != null}")
+        unloadInternal()
+        "Model unloaded."
+    }
     fun isModelLoaded(path: String): Boolean = loadedPath == path
-    fun stop() { try { engine.cancel() } catch (_: Throwable) { } }
+    fun stop() {
+        AppLog.info(app, "INFERENCE_STOP_REQUESTED")
+        try { engine.cancel() } catch (_: Throwable) { }
+    }
     fun status(): String {
         if (loadedPath == null) return "No model loaded"
         val prefix = "Model loaded · context $contextSize"
@@ -452,7 +485,7 @@ class AgentController(context: Context) : Closeable {
         } catch (_: Exception) {
             return PlanCheck(problem = PlanProblem("JSON correction", "the correction prompt could not fit the selected model's context."))
         }
-        val corrected = generateOrNull(fittedPrompt, maxTokens, ACTION_GRAMMAR, {})
+        val corrected = generateOrNull(fittedPrompt, maxTokens, ACTION_GRAMMAR, {}, "planner_correction")
             ?: return PlanCheck(problem = PlanProblem("JSON correction", "the model could not produce a corrected action plan."))
         val result = checkPlannerOutput(corrected, validate)
         val remainingProblem = result.problem ?: return result
@@ -541,7 +574,7 @@ class AgentController(context: Context) : Closeable {
                 noActionExecuted = false
             ))
         }
-        val generated = generateOrNull(fittedPrompt, 96, ACTION_GRAMMAR, {})
+        val generated = generateOrNull(fittedPrompt, 96, ACTION_GRAMMAR, {}, "action_follow_up_planner")
             ?: return PlanAttempt(failure = actionPlanFailure(
                 "follow-up generation", "the model generation was stopped or failed.", noActionExecuted = false
             ))
@@ -569,15 +602,29 @@ class AgentController(context: Context) : Closeable {
         step.tool + ":" + step.args.toSortedMap().entries.joinToString("|") { "${it.key}=${it.value}" }
 
     private fun executeValidatedPlan(steps: List<PlanStep>, originalRequest: String, source: String): ActionExecution {
+        AppLog.info(app, "ACTION_PLAN_VALIDATION_STARTED", "source=$source steps=${steps.size}")
         val invalid = validator.validatePlan(steps)
         if (invalid != null) {
             steps.forEach { step ->
                 try { actionLog.record(originalRequest, step.tool, step.args.toString(), ActionStatus.FAILED.name, invalid, source) } catch (_: Exception) { }
             }
+            AppLog.warn(app, "ACTION_PLAN_REJECTED", "source=$source steps=${steps.size} reason=validation_failed")
             return ActionExecution(steps.map { ActionResult(it.tool, ActionStatus.FAILED, invalid, it.args) })
         }
         val runtime = ToolRuntime(app, registry, validator, sharedDatabase = db)
-        return try { ActionExecution(runtime.execute(steps, originalRequest, source)) } finally { runtime.close() }
+        val startedAt = SystemClock.elapsedRealtime()
+        AppLog.info(app, "ACTION_PLAN_EXECUTION_STARTED", "source=$source steps=${steps.size}")
+        return try {
+            val results = runtime.execute(steps, originalRequest, source)
+            results.forEach { result -> AppLog.info(app, "ACTION_RESULT", "tool=${result.tool} status=${result.status.name}") }
+            AppLog.info(app, "ACTION_PLAN_EXECUTION_FINISHED", "source=$source results=${results.size} durationMs=${SystemClock.elapsedRealtime() - startedAt}")
+            ActionExecution(results)
+        } catch (e: Throwable) {
+            AppLog.error(app, "ACTION_PLAN_EXECUTION_FAILED", e, "source=$source")
+            throw e
+        } finally {
+            runtime.close()
+        }
     }
 
     private fun actionHistoryReply(question: String, results: List<ActionResult>, onToken: (String) -> Unit): String {
@@ -631,7 +678,7 @@ class AgentController(context: Context) : Closeable {
             return fallbackText
         }
         lastPromptTokens = fitted.tokens
-        val generated = generateOrNull(fitted.prompt, maxTokens, null, onToken)
+        val generated = generateOrNull(fitted.prompt, maxTokens, null, onToken, "action_response")
         if (generated != null) lastUserFacingGenerationCompletedAtMillis = lastGenerationCompletedAtMillis
         return generated ?: fallbackText
     }
@@ -643,6 +690,7 @@ class AgentController(context: Context) : Closeable {
     }
 
     private fun recordPlanFailure(request: String, message: String, source: String) {
+        AppLog.warn(app, "ACTION_PLAN_FAILED", "source=$source")
         try { actionLog.record(request, "action.plan", "{}", ActionStatus.FAILED.name, message, source) } catch (_: Exception) { }
     }
 
@@ -709,7 +757,7 @@ class AgentController(context: Context) : Closeable {
                 "prompt preparation", "the action-planning prompt could not fit the selected model's context."
             ))
         }
-        val planText = generateOrNull(plannerText, 160, ACTION_GRAMMAR, {})
+        val planText = generateOrNull(plannerText, 160, ACTION_GRAMMAR, {}, "action_planner")
             ?: return PlanAttempt(failure = actionPlanFailure(
                 "model generation", "the model generation was stopped or failed while creating the action plan."
             ))
@@ -730,13 +778,23 @@ class AgentController(context: Context) : Closeable {
         return PlanAttempt(steps = checked.steps)
     }
 
-    private fun generateOrNull(prompt: String, maxTokens: Int, grammar: String?, sink: (String) -> Unit): String? {
+    private fun generateOrNull(
+        prompt: String,
+        maxTokens: Int,
+        grammar: String?,
+        sink: (String) -> Unit,
+        phase: String = "generation"
+    ): String? {
         if (loadedPath == null) return null
+        lastPromptTokens = 0
         try { lastPromptTokens = engine.countTokens(prompt) } catch (_: Throwable) { }
         lastOutputTokens = 0
         hasGenerationMetrics = true
         val startedAt = SystemClock.elapsedRealtime()
         generationStartedAtElapsedRealtime = startedAt
+        AppLog.info(app, "GENERATION_STARTED", "phase=$phase inputTokens=$lastPromptTokens maxOutputTokens=$maxTokens")
+        var outcome = "failed"
+        var failureType: String? = null
         return try {
             val generated = StringBuilder()
             val sampling = inferenceSettingsStore.load()
@@ -774,12 +832,19 @@ class AgentController(context: Context) : Closeable {
             val text = generated.toString()
             if (stoppedAt == null && streamedLength < text.length) sink(text.substring(streamedLength))
             text.substring(0, stoppedAt ?: text.length).trim().takeIf { it.isNotEmpty() }
-        } catch (_: Throwable) {
+                .also { outcome = if (it == null) "empty" else "complete" }
+        } catch (e: Throwable) {
+            failureType = e::class.java.simpleName
             null
         } finally {
             lastGenerationMs = (SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(0)
             lastGenerationCompletedAtMillis = System.currentTimeMillis()
             generationStartedAtElapsedRealtime = null
+            AppLog.info(
+                app,
+                "GENERATION_FINISHED",
+                "phase=$phase inputTokens=$lastPromptTokens outputTokens=$lastOutputTokens durationMs=$lastGenerationMs outcome=$outcome${failureType?.let { " errorType=$it" } ?: ""}"
+            )
         }
     }
 
@@ -806,7 +871,15 @@ class AgentController(context: Context) : Closeable {
     }
 
     private fun unloadInternal() {
-        if (loadedPath != null) try { engine.unload() } catch (_: Throwable) { }
+        if (loadedPath != null) {
+            AppLog.info(app, "MODEL_UNLOAD_STARTED")
+            try {
+                engine.unload()
+                AppLog.info(app, "MODEL_UNLOAD_FINISHED", "success=true")
+            } catch (e: Throwable) {
+                AppLog.warn(app, "MODEL_UNLOAD_FAILED", "errorType=${e::class.java.simpleName}")
+            }
+        }
         loadedPath = null
     }
 

@@ -23,6 +23,7 @@ import com.pocketmind.memory.Fact
 import com.pocketmind.memory.FactStore
 import com.pocketmind.memory.NoteStore
 import com.pocketmind.memory.clearMemory
+import com.pocketmind.tools.AppLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -46,6 +47,7 @@ class MemoryFragment : Fragment(R.layout.fragment_memory) {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+        AppLog.info(requireContext(), "MEMORY_SCREEN_OPENED")
         viewScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         val prefs = requireContext().getSharedPreferences("privacy", Context.MODE_PRIVATE)
         val memoryViews = MemoryViews(
@@ -60,10 +62,12 @@ class MemoryFragment : Fragment(R.layout.fragment_memory) {
         memoryViews.factsSwitch.isChecked = prefs.getBoolean("facts_enabled", true)
         memoryViews.factsSwitch.setOnCheckedChangeListener { _, checked ->
             prefs.edit().putBoolean("facts_enabled", checked).apply()
+            AppLog.info(requireContext(), "FACT_MEMORY_SETTING_CHANGED", "enabled=$checked")
         }
         memoryViews.recallSwitch.isChecked = prefs.getBoolean("recall_enabled", true)
         memoryViews.recallSwitch.setOnCheckedChangeListener { _, checked ->
             prefs.edit().putBoolean("recall_enabled", checked).apply()
+            AppLog.info(requireContext(), "CONVERSATION_RECALL_SETTING_CHANGED", "enabled=$checked")
         }
         memoryViews.clearButton.setOnClickListener {
             confirmClearMemory(requireContext()) { clearAll() }
@@ -84,6 +88,7 @@ class MemoryFragment : Fragment(R.layout.fragment_memory) {
                 }
             }
             val currentViews = views ?: return@launch
+            AppLog.info(context, "MEMORY_OVERVIEW_LOADED", "facts=${data.first.size} actions=${data.second.size} notes=${data.third.size}")
             currentViews.facts.removeAllViews()
             currentViews.actions.removeAllViews()
             currentViews.notes.removeAllViews()
@@ -135,23 +140,27 @@ class MemoryFragment : Fragment(R.layout.fragment_memory) {
         }
 
     private fun deleteFact(key: String) {
+        AppLog.info(requireContext(), "FACT_DELETE_REQUESTED")
         val context = requireContext().applicationContext
         viewScope?.launch {
             withContext(Dispatchers.IO) {
                 val db = AppDatabase(context)
                 try { FactStore(db).delete(key) } finally { db.close() }
             }
+            AppLog.info(context, "FACT_DELETE_FINISHED")
             refresh()
         }
     }
 
     private fun clearAll() {
+        AppLog.info(requireContext(), "MEMORY_CLEAR_STARTED", "source=memory_screen")
         val context = requireContext().applicationContext
         viewScope?.launch {
             withContext(Dispatchers.IO) {
                 val db = AppDatabase(context)
                 try { clearMemory(db) } finally { db.close() }
             }
+            AppLog.info(context, "MEMORY_CLEAR_FINISHED", "source=memory_screen")
             refresh()
         }
     }
@@ -170,6 +179,7 @@ class MemoryFragment : Fragment(R.layout.fragment_memory) {
 
     companion object {
         fun confirmClearMemory(context: Context, onConfirm: () -> Unit) {
+            AppLog.info(context, "MEMORY_CLEAR_CONFIRMATION_SHOWN")
             MaterialAlertDialogBuilder(context)
                 .setTitle(R.string.clear_memory_title)
                 .setMessage(R.string.clear_memory_warning)
