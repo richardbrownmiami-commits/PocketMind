@@ -263,16 +263,25 @@ class AgentController(context: Context) : Closeable {
         }
 
         val modelPath = ModelStore(app).selected()?.absolutePath
-        if (modelPath == null || loadedPath == null) {
+        if (modelPath == null) {
             messages.append("user", raw)
             val answer = if (actionRequest) {
                 ActionRequestPolicy.noPlanReply(true, null) ?: ActionRequestPolicy.NO_SAFE_PLAN_REPLY
             } else {
-                "No model is loaded. Choose a compatible GGUF model in Models to chat or plan actions."
+                "No model is selected. Choose a compatible GGUF model in Models to chat or plan actions."
             }
             if (actionRequest) recordPlanFailure(raw, answer, "router")
             messages.append("assistant", answer)
             return@withContext AgentReply(answer)
+        }
+        if (loadedPath != modelPath) {
+            val loadResult = loadModel(modelPath)
+            if (loadedPath != modelPath) {
+                messages.append("user", raw)
+                if (actionRequest) recordPlanFailure(raw, loadResult, "router")
+                messages.append("assistant", loadResult)
+                return@withContext AgentReply(loadResult)
+            }
         }
         val userId = messages.append("user", raw)
         indexRecall(userId, raw)
@@ -339,15 +348,19 @@ class AgentController(context: Context) : Closeable {
     suspend fun loadSelectedModel(): String = withContext(dispatcher) {
         ensureOpen()
         val file = ModelStore(app).selected() ?: return@withContext "No model is selected. Import a GGUF file first."
-        if (loadedPath == file.absolutePath) return@withContext "Model is already loaded."
+        loadModel(file.absolutePath)
+    }
+
+    private fun loadModel(path: String): String {
+        if (loadedPath == path) return "Model is already loaded."
         unloadInternal()
         val settings = inferenceSettingsStore.load()
         val requestedContext = settings.contextTokens
         val threads = settings.cpuThreads
-        return@withContext try {
+        return try {
             val batch = minOf(256, requestedContext)
-            engine.load(file.absolutePath, nCtx = requestedContext, nBatch = batch, nUbatch = minOf(128, batch), threads = threads)
-            loadedPath = file.absolutePath
+            engine.load(path, nCtx = requestedContext, nBatch = batch, nUbatch = minOf(128, batch), threads = threads)
+            loadedPath = path
             contextSize = requestedContext
             "Model loaded (${requestedContext}-token context, $threads CPU threads)."
         } catch (e: Throwable) {

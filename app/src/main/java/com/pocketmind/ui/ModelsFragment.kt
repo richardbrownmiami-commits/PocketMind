@@ -71,7 +71,7 @@ class ModelsFragment : Fragment(R.layout.fragment_models) {
             picker.launch(arrayOf("application/octet-stream", "application/*", "*/*"))
         }
         views?.loadButton?.setOnClickListener {
-            if (controller.status().startsWith("Model loaded")) unload() else loadSelected()
+            if (isLoadedSelection()) unload() else loadSelected()
         }
         refresh()
     }
@@ -101,9 +101,18 @@ class ModelsFragment : Fragment(R.layout.fragment_models) {
         activeViews.emptyState.visibility = if (entries.isEmpty()) View.VISIBLE else View.GONE
         activeViews.status.text = controller.status()
         activeViews.loadButton.text = getString(
-            if (controller.status().startsWith("Model loaded")) R.string.unload_model else R.string.load_model
+            if (isLoadedSelection()) R.string.unload_model else R.string.load_model
         )
         activeViews.loadButton.isEnabled = selectedPath != null || controller.status().startsWith("Model loaded")
+    }
+
+    private fun isLoadedSelection(): Boolean {
+        val selectedPath = store.selected()?.absolutePath
+        return if (selectedPath == null) {
+            controller.status().startsWith("Model loaded")
+        } else {
+            controller.isModelLoaded(selectedPath)
+        }
     }
 
     private fun loadSelected() {
