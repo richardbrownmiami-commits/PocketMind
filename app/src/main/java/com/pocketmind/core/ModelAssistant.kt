@@ -1003,6 +1003,9 @@ class ModelAssistant(context: Context) : Closeable {
     // Compact formatter for tool catalogs used both by the planner prompt and follow-up prompts.
     private fun compactToolCatalog(tools: List<ToolSpec>): String = buildString {
         append("Legend: s=string,i=integer,n=number,b=boolean,?=optional\n")
+        // Include a short, concise purpose taken from each ToolSpec.description where available.
+        // Purpose text is collapsed to a single short sentence (no newlines) and trimmed to keep
+        // the planner prompt compact and within typical context budgets.
         tools.forEach { spec ->
             append(spec.id).append(" [")
             append(spec.args.joinToString { arg ->
@@ -1014,7 +1017,24 @@ class ModelAssistant(context: Context) : Closeable {
                 }
                 "${arg.name}:${t}${if (!arg.required) "?" else ""}"
             })
-            append("]") // purpose labels kept intentionally tiny or omitted
+            append("]")
+            // Derive a short purpose from the registered description, if present.
+            val purpose = run {
+                val desc = spec.description
+                // Collapse whitespace/newlines, keep only first sentence-ish fragment, and cap length.
+                val singleLine = desc.replace(Regex("\\s+"), " ").trim()
+                val firstSentence = singleLine.split(Regex("(?<=[.!?])\\s+")).firstOrNull() ?: singleLine
+                if (firstSentence.length > 56) {
+                    // Trim to last whole word before the cap; if no space, fallback to hard cap.
+                    val trimmed = firstSentence.substring(0, 56)
+                    val lastSpace = trimmed.lastIndexOf(' ')
+                    val safe = if (lastSpace > 0) trimmed.substring(0, lastSpace) else trimmed
+                    safe.trimEnd() + "..."
+                } else firstSentence
+            }
+            if (purpose.isNotEmpty()) {
+                append(" - ").append(purpose)
+            }
             append("\n")
         }
     }
