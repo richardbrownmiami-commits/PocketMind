@@ -334,9 +334,9 @@ class ToolRuntime internal constructor(
         }
         val matchingNextAlarm = observed != null && kotlin.math.abs(observed - expectedMillis) <= 90_000L
         return if (matchingNextAlarm) {
-            handoff(step, "The Clock app received the request for $displayTime$day, and Android reports a matching next alarm. Android does not identify which app created it, so this request is not independently verified.")
+            handoff(step, "The Clock app received the request for $displayTime$day; Android reports a matching next alarm, but this app cannot verify which app created it. This is not independently verified.")
         } else {
-            handoff(step, "The Clock app received the request for $displayTime$day, but Android did not expose a matching next alarm. This request is not independently verified.")
+            handoff(step, "The Clock app received the request for $displayTime$day, but Android did not expose a matching next alarm. This action is not independently verified.")
         }
     }
 
@@ -347,7 +347,7 @@ class ToolRuntime internal constructor(
             .putExtra(AlarmClock.EXTRA_SKIP_UI, true)
         if (intent.resolveActivity(app.packageManager) == null) return failed(step, "No Clock app can handle a timer.")
         app.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        return handoff(step, "Android accepted ACTION_SET_TIMER with EXTRA_SKIP_UI=true, which requests immediate timer start; Android exposes no timer-state read-back here, so completion and cleanup remain user-assisted.")
+        return handoff(step, "The system accepted the timer-start request; the timer may be running, but this app cannot verify its state or automatic cleanup.")
     }
 
     private fun setTorch(step: PlanStep, enabled: Boolean): ActionResult {
@@ -425,7 +425,7 @@ class ToolRuntime internal constructor(
         }
         if (intent == null) return failed(step, "No launchable installed app matched '$packageName'.")
         app.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        return handoff(step, "Opened the requested app. Android handed the screen to it.")
+        return handoff(step, "Opened the requested app. Android handed the screen to it; this app cannot verify any in-app completion.")
     }
 
     private fun searchApps(step: PlanStep, query: String): ActionResult {
