@@ -60,7 +60,7 @@ class ChatFragment : Fragment(R.layout.fragment_chat) {
         "Processing kar raha hoon…"
     )
 
-    private val controller get() = (requireActivity().application as PocketMindApplication).agentController
+    private val controller get() = (requireActivity().application as PocketMindApplication).modelAssistant
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)

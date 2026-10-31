@@ -40,7 +40,7 @@ class ModelsFragment : Fragment(R.layout.fragment_models) {
     private var adapter: ModelAdapter? = null
     private var viewScope: CoroutineScope? = null
     private val store by lazy(LazyThreadSafetyMode.NONE) { ModelStore(requireContext().applicationContext) }
-    private val controller get() = (requireActivity().application as PocketMindApplication).agentController
+    private val controller get() = (requireActivity().application as PocketMindApplication).modelAssistant
     private val picker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) {
             AppLog.info(requireContext(), "MODEL_IMPORT_PICKER_RESULT", "type=GGUF outcome=selected")

@@ -52,7 +52,7 @@ class ToolRuntime internal constructor(
     private val usesScratchDatabase = databaseName != DEFAULT_DATABASE_NAME
     init {
         require(usesScratchDatabase || sharedDatabase != null) {
-            "The normal chat database must be shared with AgentController."
+            "The normal chat database must be shared with ModelAssistant."
         }
     }
     private val databaseDelegate = lazy {

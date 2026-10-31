@@ -24,7 +24,7 @@ import kotlinx.coroutines.withContext
 
 class RwkvFragment : Fragment() {
     private val store by lazy(LazyThreadSafetyMode.NONE) { ModelStore(requireContext().applicationContext) }
-    private val controller get() = (requireActivity().application as PocketMindApplication).agentController
+    private val controller get() = (requireActivity().application as PocketMindApplication).modelAssistant
     private var scope: CoroutineScope? = null
     private var status: TextView? = null
     private var loadButton: MaterialButton? = null

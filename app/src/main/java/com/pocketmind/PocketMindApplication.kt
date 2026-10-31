@@ -4,11 +4,11 @@ import android.app.Activity
 import android.app.Application
 import android.os.Bundle
 import android.content.res.Configuration
-import com.pocketmind.core.AgentController
+import com.pocketmind.core.ModelAssistant
 import com.pocketmind.tools.AppLog
 
 class PocketMindApplication : Application() {
-    val agentController: AgentController by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { AgentController(this) }
+    val modelAssistant: ModelAssistant by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { ModelAssistant(this) }
     private var startedActivityCount = 0
 
     override fun onCreate() {
