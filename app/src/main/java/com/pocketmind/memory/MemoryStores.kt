@@ -263,6 +263,36 @@ class RecallStore(private val db: SQLiteDatabase) {
     }
 }
 
+/** Marks only new direct assistant replies as safe for conversational recall. */
+class RecallProvenanceStore(private val db: SQLiteDatabase) {
+    constructor(helper: AppDatabase) : this(helper.writableDatabase)
+
+    init {
+        db.execSQL("CREATE TABLE IF NOT EXISTS recall_provenance(message_id INTEGER PRIMARY KEY, kind TEXT NOT NULL)")
+    }
+
+    fun markAssistantSafe(messageId: Long) {
+        AppLog.databaseOperation("recall_provenance", "mark_assistant_safe") {
+            val values = ContentValues().apply { put("message_id", messageId); put("kind", "direct_assistant") }
+            db.insertWithOnConflict("recall_provenance", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+        }
+    }
+
+    fun isAssistantSafe(messageId: Long): Boolean {
+        var safe = false
+        db.forEach("SELECT kind FROM recall_provenance WHERE message_id=?", arrayOf(messageId.toString())) {
+            safe = it.text("kind") == "direct_assistant"
+        }
+        return safe
+    }
+
+    fun clear() {
+        AppLog.databaseOperation("recall_provenance", "clear") {
+            db.delete("recall_provenance", null, null)
+        }
+    }
+}
+
 class ActionLogStore(private val db: SQLiteDatabase) {
     constructor(helper: AppDatabase) : this(helper.writableDatabase)
 
@@ -336,7 +366,7 @@ class ActionLogStore(private val db: SQLiteDatabase) {
     }
 
     companion object {
-        private val ACTION_SOURCES = setOf("rules", "planner", "router", "legacy", "unknown")
+        private val ACTION_SOURCES = setOf("rules", "planner", "router", "agent", "legacy", "unknown")
     }
 }
 
@@ -345,6 +375,7 @@ data class ActionRecord(val id: Long, val request: String, val tool: String, val
 fun clearMemory(db: SQLiteDatabase) {
     AppLog.databaseOperation("memory", "clear") {
         RecallStore(db).clear()
+        RecallProvenanceStore(db).clear()
         AppLog.databaseOperation("messages", "clear") {
             db.delete("messages", null, null)
             try { db.execSQL("DELETE FROM messages_fts") } catch (_: Exception) { }

@@ -1,7 +1,5 @@
 package com.pocketmind.engine
 
-import com.pocketmind.tools.LiveSearchPlannerContext
-
 /** One native instance; callers must serialize load/generate/unload on the model queue. */
 class LlamaEngine {
     companion object {
@@ -47,36 +45,14 @@ class LlamaEngine {
         require(topK in 1..100) { "Top-k must be between 1 and 100" }
         require(topP.isFinite() && topP in 0.05f..1.0f) { "Top-p must be between 0.05 and 1.0" }
 
-        // Explicit web-search requests are already unambiguous at the router boundary.
-        // Do not spend native inference tokens asking the small local model to emit a
-        // tool-call JSON envelope; return the validated deterministic plan immediately.
-        LiveSearchPlannerContext.takeQuery()?.let { query ->
-            val plan = "{\"steps\":[{\"tool\":\"web.search\",\"args\":{\"query\":\"${escapeJson(query)}\",\"limit\":2}}]}"
-            onOutputTokens(try { countTokens(plan) } catch (_: Throwable) { 0 })
-            onToken(plan)
-            return plan
-        }
-
         return nativeGenerate(prompt, maxTokens, grammar, temperature, topK, topP, TokenSink(onToken, onOutputTokens))
     }
 
     fun countTokens(text: String): Int = nativeCountTokens(text)
     fun cancel() = nativeCancel()
+    fun resetCancellation() = nativeResetCancellation()
     fun unload() = nativeUnload()
     fun stats(): String = nativeStats()
-
-    private fun escapeJson(value: String): String = buildString(value.length) {
-        value.forEach { c ->
-            when (c) {
-                '\\' -> append("\\\\")
-                '"' -> append("\\\"")
-                '\n' -> append("\\n")
-                '\r' -> append("\\r")
-                '\t' -> append("\\t")
-                else -> append(c)
-            }
-        }
-    }
 
     private class TokenSink(
         private val onToken: (String) -> Unit,
@@ -101,6 +77,7 @@ class LlamaEngine {
     ): String
     private external fun nativeCountTokens(text: String): Int
     private external fun nativeCancel()
+    private external fun nativeResetCancellation()
     private external fun nativeUnload()
     private external fun nativeStats(): String
 }

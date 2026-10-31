@@ -16,6 +16,7 @@ import android.provider.AlarmClock
 import android.provider.Settings
 import com.pocketmind.memory.ActionLogStore
 import com.pocketmind.memory.AppDatabase
+import com.pocketmind.memory.FactStore
 import com.pocketmind.memory.NoteStore
 import java.io.File
 import java.io.IOException
@@ -30,20 +31,15 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
-/** A failed side effect may already have happened; never replay it automatically. */
-internal object ToolExecutionRetryPolicy {
-    private val retrySafeTools = setOf(
-        "clock.time", "clock.date", "math.calculate", "note.list", "note.search",
-        "battery/status", "app.search", "action.history"
-    )
-
-    fun maximumAttempts(step: PlanStep): Int = if (step.tool in retrySafeTools) 3 else 1
+/** A capability veto only: it never chooses a tool, but prevents partial app launches for messaging tasks. */
+private object UnsupportedAppActionGuard {
+    private val inAppAction = Regex("(?i)\\b(?:send|sending|text|message|messaging|reply|post|comment|email|e-mail|dm|type|typing)\\b")
+    fun blocksAppOpen(request: String): Boolean = inAppAction.containsMatchIn(request)
 }
 
 class ToolRuntime internal constructor(
     private val context: Context,
     private val registry: ToolRegistry,
-    private val validator: ToolValidator = ToolValidator(registry),
     private val sharedDatabase: AppDatabase? = null,
     private val databaseName: String = DEFAULT_DATABASE_NAME,
     private val searchCancellation: SearchCancellation = SearchCancellation()
@@ -61,6 +57,7 @@ class ToolRuntime internal constructor(
     }
     private val database by databaseDelegate
     private val notes by lazy { NoteStore(database) }
+    private val facts by lazy { FactStore(database) }
     private val actions by lazy { ActionLogStore(database) }
 
     fun close() {
@@ -76,70 +73,41 @@ class ToolRuntime internal constructor(
         }
     }
 
-    fun execute(steps: List<PlanStep>, originalRequest: String, source: String = "unknown"): List<ActionResult> {
-        val planStartedAt = SystemClock.elapsedRealtime()
+    fun execute(call: ToolInvocation, originalRequest: String, source: String = "agent"): ActionResult {
+        val startedAt = SystemClock.elapsedRealtime()
         val safeSource = safeIdentifier(source)
-        AppLog.info(app, "TOOL_PLAN_EXECUTION_STARTED", "source=$safeSource steps=${steps.size}")
-        if (steps.size > 8) {
-            AppLog.warn(app, "TOOL_PLAN_REJECTED", "source=$safeSource reason=step_limit steps=${steps.size}")
-            val rejected = listOf(finish(PlanStep("action.plan", emptyMap()), originalRequest, ActionStatus.FAILED, "Plan exceeds 8 steps", source))
-            AppLog.info(app, "TOOL_PLAN_EXECUTION_FINISHED", "source=$safeSource outcome=rejected results=1 durationMs=${SystemClock.elapsedRealtime() - planStartedAt}")
-            return rejected
+        val safeTool = safeIdentifier(call.tool)
+        AppLog.info(app, "TOOL_CALL_STARTED", "source=$safeSource tool=$safeTool")
+        val validationError = ToolCallDecoder.error(call, registry)
+        val result = if (validationError != null) {
+            AppLog.warn(app, "TOOL_CALL_REJECTED", "tool=$safeTool reason=typed_input")
+            failed(call, validationError)
+        } else if (call.tool == "app.open" && UnsupportedAppActionGuard.blocksAppOpen(originalRequest)) {
+            AppLog.warn(app, "TOOL_CALL_REJECTED", "tool=$safeTool reason=unsupported_in_app_action")
+            failed(call, "I can only open apps; I cannot send or type messages, so no app was opened.")
+        } else {
+            perform(call, originalRequest)
         }
-        val results = steps.mapIndexed { index, step ->
-            val stepStartedAt = SystemClock.elapsedRealtime()
-            val safeTool = safeIdentifier(step.tool)
-            AppLog.info(app, "TOOL_STEP_STARTED", "source=$safeSource step=${index + 1} tool=$safeTool")
-            val invalid = validator.validate(step)
-            if (invalid != null) {
-                AppLog.warn(app, "TOOL_STEP_REJECTED", "tool=$safeTool reason=validation")
-                val rejected = finish(step, originalRequest, ActionStatus.FAILED, invalid, source)
-                AppLog.info(app, "TOOL_STEP_FINISHED", "tool=$safeTool status=${rejected.status.name} reason=validation durationMs=${SystemClock.elapsedRealtime() - stepStartedAt}")
-                rejected
-            } else if (registry.get(step.tool) == null) {
-                AppLog.warn(app, "TOOL_STEP_REJECTED", "tool=$safeTool reason=unknown_tool")
-                val rejected = finish(step, originalRequest, ActionStatus.FAILED, "Unknown tool", source)
-                AppLog.info(app, "TOOL_STEP_FINISHED", "tool=$safeTool status=${rejected.status.name} reason=unknown_tool durationMs=${SystemClock.elapsedRealtime() - stepStartedAt}")
-                rejected
-            } else {
-                var attempts = 0
-                val maximumAttempts = ToolExecutionRetryPolicy.maximumAttempts(step)
-                var result: ActionResult
-                do {
-                    attempts++
-                    val attemptStartedAt = SystemClock.elapsedRealtime()
-                    AppLog.info(app, "TOOL_ATTEMPT_STARTED", "source=$safeSource tool=$safeTool attempt=$attempts maxAttempts=$maximumAttempts")
-                    result = perform(step, originalRequest)
-                    val reason = if (result.status == ActionStatus.FAILED) failureCategory(step.tool, result.message) else "none"
-                    AppLog.info(app, "TOOL_ATTEMPT_FINISHED", "tool=$safeTool attempt=$attempts status=${result.status.name} reason=$reason durationMs=${SystemClock.elapsedRealtime() - attemptStartedAt}")
-                    if (result.status == ActionStatus.FAILED && attempts < maximumAttempts) {
-                        AppLog.info(app, "TOOL_RETRY_DECISION", "tool=$safeTool decision=retry nextAttempt=${attempts + 1}")
-                    }
-                } while (result.status == ActionStatus.FAILED && attempts < maximumAttempts)
-                val completed = finish(step, originalRequest, result.status, result.message, source)
-                val finalReason = if (completed.status == ActionStatus.FAILED) failureCategory(step.tool, completed.message) else "none"
-                AppLog.info(app, "TOOL_STEP_FINISHED", "tool=$safeTool status=${completed.status.name} reason=$finalReason attempts=$attempts durationMs=${SystemClock.elapsedRealtime() - stepStartedAt}")
-                completed
-            }
-        }
-        AppLog.info(app, "TOOL_PLAN_EXECUTION_FINISHED", "source=$safeSource results=${results.size} verified=${results.count { it.status == ActionStatus.VERIFIED }} handedOff=${results.count { it.status == ActionStatus.HANDED_OFF }} failed=${results.count { it.status == ActionStatus.FAILED }} durationMs=${SystemClock.elapsedRealtime() - planStartedAt}")
-        return results
+        val completed = finish(call, originalRequest, result.status, result.message, source)
+        val reason = if (completed.status == ActionStatus.FAILED) failureCategory(call.tool, completed.message) else "none"
+        AppLog.info(app, "TOOL_CALL_FINISHED", "tool=$safeTool status=${completed.status.name} reason=$reason durationMs=${SystemClock.elapsedRealtime() - startedAt}")
+        return completed
     }
 
-    private fun finish(step: PlanStep, originalRequest: String, status: ActionStatus, message: String, source: String): ActionResult {
-        val result = ActionResult(step.tool, status, message, step.args)
-        if (step.tool == "action.history") return result
+    private fun finish(call: ToolInvocation, originalRequest: String, status: ActionStatus, message: String, source: String): ActionResult {
+        val result = ActionResult(call.tool, status, message, call.args)
+        if (call.tool == "action.history") return result
         try {
-            val safeArgs = step.args.entries.joinToString(prefix = "{", postfix = "}") { "${it.key}=${it.value}" }.take(500)
-            actions.record(originalRequest, step.tool, safeArgs, status.name, message, source)
+            val safeArgs = call.args.entries.joinToString(prefix = "{", postfix = "}") { "${it.key}=${it.value}" }.take(500)
+            actions.record(originalRequest, call.tool, safeArgs, status.name, message, source)
             return result
         } catch (e: Exception) {
-            AppLog.error(app, "ACTION_HISTORY_WRITE_FAILED", e, "tool=${safeIdentifier(step.tool)}")
+            AppLog.error(app, "ACTION_HISTORY_WRITE_FAILED", e, "tool=${safeIdentifier(call.tool)}")
             return result.copy(message = "$message The action could not be saved to local history.")
         }
     }
 
-    private fun perform(step: PlanStep, originalRequest: String): ActionResult {
+    private fun perform(step: ToolInvocation, originalRequest: String): ActionResult {
         val a = step.args
         return try {
             when (step.tool) {
@@ -159,6 +127,25 @@ class ToolRuntime internal constructor(
                 "note.search" -> {
                     val found = notes.search(a["query"] as String)
                     verified(step, if (found.isEmpty()) "No matching notes." else found.joinToString("\n") { "• ${it.content}" })
+                }
+                "fact.save" -> {
+                    val enabled = app.getSharedPreferences("privacy", Context.MODE_PRIVATE).getBoolean("facts_enabled", true)
+                    if (!enabled) failed(step, "Fact memory is turned off; nothing was saved.")
+                    else if (facts.capture(a["text"] as String)) verified(step, "Personal fact saved to local memory.")
+                    else failed(step, "I could not identify a supported personal fact to save.")
+                }
+                "fact.list" -> {
+                    val enabled = app.getSharedPreferences("privacy", Context.MODE_PRIVATE).getBoolean("facts_enabled", true)
+                    val saved = if (enabled) facts.all() else emptyList()
+                    verified(step, when {
+                        !enabled -> "Fact memory is turned off."
+                        saved.isEmpty() -> "No saved personal facts."
+                        else -> saved.joinToString("\n") { "${it.key}: ${it.value}" }
+                    })
+                }
+                "fact.forget" -> {
+                    val count = facts.forget(a["query"] as String)
+                    verified(step, if (count > 0) "Forgot the matching saved fact." else "No matching saved fact was found.")
                 }
                 "action.history" -> actionHistory(step)
                 "web.search" -> webSearch(step)
@@ -181,18 +168,17 @@ class ToolRuntime internal constructor(
         }
     }
 
-    private fun actionHistory(step: PlanStep): ActionResult {
+    private fun actionHistory(step: ToolInvocation): ActionResult {
         val query = step.args["query"] as? String
         val limit = (step.args["limit"] as? Number)?.toInt() ?: 5
         val requestedSource = (step.args["source"] as? String)?.lowercase()
         val source = requestedSource?.takeUnless { it == "all" }
-        val records = actions.search(query, 20, source)
-            .filterNot { it.tool == "action.plan" }
-            .take(limit.coerceIn(1, 5))
+        val records = actions.search(query, 20, source).take(limit.coerceIn(1, 5))
         if (records.isEmpty()) {
             val sourceLabel = when (source) {
                 "rules" -> "rule-based"
                 "planner" -> "model-planned"
+                "agent" -> "model-driven"
                 else -> ""
             }
             val message = if (sourceLabel.isEmpty()) "No recorded actions found." else "No recorded $sourceLabel actions found."
@@ -213,7 +199,7 @@ class ToolRuntime internal constructor(
 
 
 
-    private fun apiGet(step: PlanStep): ActionResult {
+    private fun apiGet(step: ToolInvocation): ActionResult {
         val url = step.args["url"] as String
         val startedAt = SystemClock.elapsedRealtime()
         AppLog.info(app, "NETWORK_OPERATION_STARTED", "operation=api_get")
@@ -230,7 +216,7 @@ class ToolRuntime internal constructor(
         }
     }
 
-    private fun apiDiscover(step: PlanStep): ActionResult {
+    private fun apiDiscover(step: ToolInvocation): ActionResult {
         val query = step.args["query"] as String
         val limit = (step.args["limit"] as? Number)?.toInt() ?: 3
         val startedAt = SystemClock.elapsedRealtime()
@@ -248,7 +234,7 @@ class ToolRuntime internal constructor(
         }
     }
 
-    private fun webSearch(step: PlanStep): ActionResult {
+    private fun webSearch(step: ToolInvocation): ActionResult {
         val query = step.args["query"] as String
         val limit = (step.args["limit"] as? Number)?.toInt() ?: 2
         val startedAt = SystemClock.elapsedRealtime()
@@ -289,22 +275,16 @@ class ToolRuntime internal constructor(
         }
     }
 
-    private fun setAlarm(step: PlanStep, originalRequest: String): ActionResult {
+    private fun setAlarm(step: ToolInvocation, originalRequest: String): ActionResult {
         val hour = (step.args["hour"] as Number).toInt()
         val minute = (step.args["minute"] as Number).toInt()
         val displayTime = LocalTime.of(hour, minute).format(DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault()))
         val dayOffset = (step.args["daysFromToday"] as? Number)?.toInt()
         val label = (step.args["label"] as? String)?.take(80)
-        val requestsTomorrow = Regex("\\btomorrow\\b", RegexOption.IGNORE_CASE).containsMatchIn(originalRequest)
-        val requestsUnsupportedDate = RuleEngine.hasUnsupportedAlarmDate(originalRequest)
-        if (dayOffset == 1 || requestsTomorrow || requestsUnsupportedDate) {
-            val dateMessage = when {
-                dayOffset == 1 || requestsTomorrow -> "I did not set an alarm for tomorrow; please set a one-time alarm for tomorrow directly in Clock."
-                else -> "I did not set an alarm for that calendar date; please set it directly in Clock."
-            }
+        if (AlarmCalendarDateGuard.requestsUnsupportedDate(originalRequest, step)) {
             return failed(
                 step,
-                "Android Clock's alarm action cannot specify a one-time calendar date. $dateMessage"
+                "Android Clock's alarm action cannot schedule a one-time calendar date or weekday. I did not set an alarm; please set it directly in Clock."
             )
         }
         if (dayOffset == 0 && !LocalDate.now().atTime(hour, minute).isAfter(LocalDateTime.now())) {
@@ -340,7 +320,7 @@ class ToolRuntime internal constructor(
         }
     }
 
-    private fun setTimer(step: PlanStep): ActionResult {
+    private fun setTimer(step: ToolInvocation): ActionResult {
         val seconds = (step.args["seconds"] as Number).toInt()
         val intent = Intent(AlarmClock.ACTION_SET_TIMER)
             .putExtra(AlarmClock.EXTRA_LENGTH, seconds)
@@ -350,7 +330,7 @@ class ToolRuntime internal constructor(
         return handoff(step, "The system accepted the timer-start request; the timer may be running, but this app cannot verify its state or automatic cleanup.")
     }
 
-    private fun setTorch(step: PlanStep, enabled: Boolean): ActionResult {
+    private fun setTorch(step: ToolInvocation, enabled: Boolean): ActionResult {
         val manager = app.getSystemService(Context.CAMERA_SERVICE) as CameraManager
         val camera = manager.cameraIdList.firstOrNull { id -> manager.getCameraCharacteristics(id).get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true }
             ?: return failed(step, "No flashlight is available.")
@@ -371,7 +351,7 @@ class ToolRuntime internal constructor(
         else handoff(step, "Android accepted the torch request, but its callback did not confirm the state.")
     }
 
-    private fun setVolume(step: PlanStep): ActionResult {
+    private fun setVolume(step: ToolInvocation): ActionResult {
         val audio = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
         val current = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
@@ -391,7 +371,7 @@ class ToolRuntime internal constructor(
         return if (actual == target) verified(step, success) else failed(step, success)
     }
 
-    private fun setBrightness(step: PlanStep, level: Int): ActionResult {
+    private fun setBrightness(step: ToolInvocation, level: Int): ActionResult {
         if (!Settings.System.canWrite(app)) {
             val intent = Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, Uri.parse("package:${app.packageName}"))
             app.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -402,7 +382,7 @@ class ToolRuntime internal constructor(
         return if (wrote && actual == level) verified(step, "Brightness updated and read back.") else failed(step, "Brightness could not be verified.")
     }
 
-    private fun batteryStatus(step: PlanStep): ActionResult {
+    private fun batteryStatus(step: ToolInvocation): ActionResult {
         val battery = app.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
         val memory = ActivityManager.MemoryInfo().also { (app.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(it) }
         val data = File(Environment.getDataDirectory().path)
@@ -410,7 +390,7 @@ class ToolRuntime internal constructor(
         return verified(step, text)
     }
 
-    private fun openApp(step: PlanStep, packageName: String): ActionResult {
+    private fun openApp(step: ToolInvocation, packageName: String): ActionResult {
         val packageManager = app.packageManager
         var intent = packageManager.getLaunchIntentForPackage(packageName)
         if (intent == null) {
@@ -428,7 +408,7 @@ class ToolRuntime internal constructor(
         return handoff(step, "Opened the requested app. Android handed the screen to it; this app cannot verify any in-app completion.")
     }
 
-    private fun searchApps(step: PlanStep, query: String): ActionResult {
+    private fun searchApps(step: ToolInvocation, query: String): ActionResult {
         val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         val matches = app.packageManager.queryIntentActivities(intent, 0)
             .map { it to it.loadLabel(app.packageManager).toString() }
@@ -437,7 +417,7 @@ class ToolRuntime internal constructor(
         return verified(step, if (matches.isEmpty()) "No installed app matched '$query'." else matches.joinToString("\n") { "${it.second} (${it.first.activityInfo.packageName})" })
     }
 
-    private fun openSettings(step: PlanStep): ActionResult {
+    private fun openSettings(step: ToolInvocation): ActionResult {
         val action = when (step.tool) {
             "wifi.settings" -> Settings.ACTION_WIFI_SETTINGS
             "bluetooth.settings" -> Settings.ACTION_BLUETOOTH_SETTINGS
@@ -450,9 +430,9 @@ class ToolRuntime internal constructor(
         return handoff(step, "Opened Android settings. Please make the change there; Android 11 does not allow this app to toggle it silently.")
     }
 
-    private fun verified(step: PlanStep, message: String) = ActionResult(step.tool, ActionStatus.VERIFIED, message, step.args)
-    private fun handoff(step: PlanStep, message: String) = ActionResult(step.tool, ActionStatus.HANDED_OFF, message, step.args)
-    private fun failed(step: PlanStep, message: String) = ActionResult(step.tool, ActionStatus.FAILED, message, step.args)
+    private fun verified(step: ToolInvocation, message: String) = ActionResult(step.tool, ActionStatus.VERIFIED, message, step.args)
+    private fun handoff(step: ToolInvocation, message: String) = ActionResult(step.tool, ActionStatus.HANDED_OFF, message, step.args)
+    private fun failed(step: ToolInvocation, message: String) = ActionResult(step.tool, ActionStatus.FAILED, message, step.args)
 
     private fun safeIdentifier(value: String): String =
         value.take(64).takeIf { it.matches(Regex("[A-Za-z0-9._/-]+")) } ?: "unknown"
@@ -467,7 +447,7 @@ class ToolRuntime internal constructor(
                 text.contains("network") || text.contains("internet") || text.contains("api request") || text.contains("live web search") || text.contains("provider blocked") -> "network_or_provider"
                 text.contains("invalid") || text.contains("exceeds") || text.contains("cannot specify") -> "invalid_input_or_unsupported"
                 text.contains("no ") || text.contains("not found") || text.contains("unavailable") || text.contains("could not find") -> "not_found_or_unavailable"
-                else -> if (tool == "action.plan") "planning_failure" else "operation_failed"
+                else -> "operation_failed"
             }
         }
     }

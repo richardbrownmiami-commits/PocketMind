@@ -256,7 +256,6 @@ Java_com_pocketmind_engine_LlamaEngine_nativeGenerate(JNIEnv *env, jobject, jstr
     bool expected = false;
     if (!g_generating.compare_exchange_strong(expected, true)) { throwJava(env, "A generation is already in progress"); return nullptr; }
     struct Reset { ~Reset() { g_generating.store(false); } } reset;
-    g_cancelled.store(false);
     const std::string prompt = toUtf8(env, jprompt);
     const std::string grammar = toUtf8(env, jgrammar);
     const llama_vocab *vocab = llama_model_get_vocab(g_model);
@@ -356,6 +355,11 @@ Java_com_pocketmind_engine_LlamaEngine_nativeCountTokens(JNIEnv *env, jobject, j
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_pocketmind_engine_LlamaEngine_nativeCancel(JNIEnv *, jobject) { g_cancelled.store(true); }
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_pocketmind_engine_LlamaEngine_nativeResetCancellation(JNIEnv *, jobject) {
+    if (!g_generating.load()) g_cancelled.store(false);
+}
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_pocketmind_engine_LlamaEngine_nativeUnload(JNIEnv *, jobject) {
