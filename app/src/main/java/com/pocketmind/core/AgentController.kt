@@ -254,30 +254,29 @@ class AgentController(context: Context) : Closeable {
         val rule = RuleEngine.match(raw)
         val explicitHistoryRequest = ActionRequestPolicy.isActionHistoryRequest(raw)
         val explicitLiveSearchRequest = ActionRequestPolicy.isLiveSearchRequest(raw)
-        val actionRequest = explicitHistoryRequest || explicitLiveSearchRequest || ActionRequestPolicy.looksLikeAction(raw, ruleMatched = rule != null)
+        // A non-empty deterministic rule is used only as a signal that the user likely intends an action.
+        // It does not cause the controller to execute the rule's plan or short-circuit planning here.
+        // The raw user text is still evaluated by ActionRequestPolicy (ruleMatched = false).
+        // An empty deterministic rule (rule != null && rule.isEmpty()) is preserved as an explicit opt-out.
+        val ruleSuggestedAction = rule?.isNotEmpty() == true
+        val actionRequest = explicitHistoryRequest ||
+            explicitLiveSearchRequest ||
+            ActionRequestPolicy.looksLikeAction(raw, ruleMatched = false) ||
+            ruleSuggestedAction
         AppLog.info(app, "AGENT_ROUTE_DECISION", "ruleMatched=${rule != null} actionRequest=$actionRequest actionHistory=$explicitHistoryRequest liveSearch=$explicitLiveSearchRequest")
-        if (rule != null) {
+        if (rule != null && rule.isEmpty()) {
+            // Preserve the explicit opt-out behavior exactly: an empty deterministic rule means "do not act".
             val userId = messages.append("user", raw)
             indexRecall(userId, raw)
-            if (rule.isEmpty()) {
-                val answer = generateActionReply(
-                    "The user explicitly said not to perform the action. Confirm that no action was taken, in one short sentence.",
-                    emptyList(), onToken, "Okay — I won’t take that action."
-                )
-                val replyTime = userFacingReplyTimestamp()
-                val assistantId = messages.append("assistant", answer, replyTime)
-                indexRecall(assistantId, answer)
-                AppLog.info(app, "AGENT_REPLY_PATH", "path=rule_opt_out")
-                return@withContext AgentReply(answer, completedAtMillis = replyTime)
-            }
-            val execution = executeValidatedPlan(rule, raw, "rules")
-            val answer = actionExecutionReply(raw, execution.results, onToken)
+            val answer = generateActionReply(
+                "The user explicitly said not to perform the action. Confirm that no action was taken, in one short sentence.",
+                emptyList(), onToken, "Okay — I won’t take that action."
+            )
             val replyTime = userFacingReplyTimestamp()
             val assistantId = messages.append("assistant", answer, replyTime)
             indexRecall(assistantId, answer)
-            updateTopic(raw, execution.results)
-            AppLog.info(app, "AGENT_REPLY_PATH", "path=rule_action actions=${execution.results.size}")
-            return@withContext AgentReply(answer, execution.results, replyTime)
+            AppLog.info(app, "AGENT_REPLY_PATH", "path=rule_opt_out")
+            return@withContext AgentReply(answer, completedAtMillis = replyTime)
         }
 
         val clarification = RuleEngine.clarification(raw)
