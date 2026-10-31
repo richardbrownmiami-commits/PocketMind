@@ -37,6 +37,7 @@ class MemoryFragment : Fragment(R.layout.fragment_memory) {
     private data class MemoryViews(
         val factsSwitch: MaterialSwitch,
         val recallSwitch: MaterialSwitch,
+        val webSearchSwitch: MaterialSwitch,
         val facts: LinearLayout,
         val actions: LinearLayout,
         val notes: LinearLayout,
@@ -54,6 +55,7 @@ class MemoryFragment : Fragment(R.layout.fragment_memory) {
         val memoryViews = MemoryViews(
             factsSwitch = view.findViewById(R.id.facts_switch),
             recallSwitch = view.findViewById(R.id.recall_switch),
+            webSearchSwitch = view.findViewById(R.id.web_search_switch),
             facts = view.findViewById(R.id.facts_container),
             actions = view.findViewById(R.id.actions_container),
             notes = view.findViewById(R.id.notes_container),
@@ -69,6 +71,12 @@ class MemoryFragment : Fragment(R.layout.fragment_memory) {
         memoryViews.recallSwitch.setOnCheckedChangeListener { _, checked ->
             prefs.edit().putBoolean("recall_enabled", checked).apply()
             AppLog.info(requireContext(), "CONVERSATION_RECALL_SETTING_CHANGED", "enabled=$checked")
+        }
+        memoryViews.webSearchSwitch.isChecked = prefs.getString("web_search_mode", "auto") != "off"
+        memoryViews.webSearchSwitch.setOnCheckedChangeListener { _, checked ->
+            val mode = if (checked) "auto" else "off"
+            prefs.edit().putString("web_search_mode", mode).apply()
+            AppLog.info(requireContext(), "WEB_SEARCH_MODE_CHANGED", "mode=$mode")
         }
         memoryViews.clearButton.setOnClickListener {
             AppLog.info(requireContext(), "UI_CONTROL_TAPPED", "screen=memory control=clear_memory")

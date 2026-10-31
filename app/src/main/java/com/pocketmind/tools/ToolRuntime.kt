@@ -26,6 +26,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import java.util.concurrent.CancellationException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -39,12 +40,13 @@ internal object ToolExecutionRetryPolicy {
     fun maximumAttempts(step: PlanStep): Int = if (step.tool in retrySafeTools) 3 else 1
 }
 
-class ToolRuntime(
+class ToolRuntime internal constructor(
     private val context: Context,
     private val registry: ToolRegistry,
     private val validator: ToolValidator = ToolValidator(registry),
     private val sharedDatabase: AppDatabase? = null,
-    private val databaseName: String = DEFAULT_DATABASE_NAME
+    private val databaseName: String = DEFAULT_DATABASE_NAME,
+    private val searchCancellation: SearchCancellation = SearchCancellation()
 ) {
     private val app = context.applicationContext
     private val usesScratchDatabase = databaseName != DEFAULT_DATABASE_NAME
@@ -252,7 +254,7 @@ class ToolRuntime(
         val startedAt = SystemClock.elapsedRealtime()
         AppLog.info(app, "NETWORK_OPERATION_STARTED", "operation=live_web_search")
         return try {
-            val hits = LiveWebSearch.search(app, query, limit)
+            val hits = LiveWebSearch.search(app, query, limit, searchCancellation)
             AppLog.info(app, "NETWORK_OPERATION_FINISHED", "operation=live_web_search outcome=success resultCount=${hits.size} durationMs=${SystemClock.elapsedRealtime() - startedAt}")
             if (hits.isEmpty()) return verified(step, "No live web results were found.")
             val message = buildString {
@@ -268,10 +270,15 @@ class ToolRuntime(
                 }
             }
             verified(step, message.trim())
+        } catch (e: CancellationException) {
+            AppLog.info(app, "NETWORK_OPERATION_FINISHED", "operation=live_web_search outcome=cancelled durationMs=${SystemClock.elapsedRealtime() - startedAt}")
+            failed(step, "Live web search was cancelled; no results were retrieved.")
         } catch (e: IOException) {
             AppLog.warn(app, "NETWORK_OPERATION_FINISHED", "operation=live_web_search outcome=failed reason=io errorType=${e::class.java.simpleName} durationMs=${SystemClock.elapsedRealtime() - startedAt}")
             val message = if (e.message?.contains("blocked", ignoreCase = true) == true) {
                 "The live search provider blocked this request; no live results were retrieved."
+            } else if (e.message?.contains("Only one web search", ignoreCase = true) == true) {
+                "A second web search was not run; only one search is allowed per message."
             } else {
                 "Live web search failed, so no live results were retrieved. Check the Internet connection or try again."
             }

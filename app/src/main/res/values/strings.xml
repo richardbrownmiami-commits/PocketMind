@@ -10,7 +10,7 @@
     <string name="menu_debug_logger">Debug logger</string>
     <string name="menu_clear_memory">Clear memory</string>
     <string name="debug_log_title">Debug logger</string>
-    <string name="debug_log_privacy_note">Full-content capture is enabled only in debuggable builds. In that mode, the on-device log records chat messages, rendered prompts (including recalled context), and generated responses; content is not written to Logcat. Logs remain in app-private storage unless exported. Credential and URL scrubbing is best-effort; inspect before sharing. Clear logs to remove retained history.</string>
+    <string name="debug_log_privacy_note">Diagnostic logs record operational metadata only; chat messages, rendered prompts, and generated responses are not captured. Logs remain in app-private storage unless you choose to export them. Review before sharing, and clear logs to remove retained history.</string>
     <string name="debug_log_refresh">Refresh</string>
     <string name="debug_log_clear">Clear logs</string>
     <string name="debug_log_empty">No debug events have been recorded yet.</string>
@@ -45,6 +45,8 @@
     <string name="memory_title">Memory</string>
     <string name="remember_facts">Remember facts from conversation</string>
     <string name="recall_conversations">Recall past conversations</string>
+    <string name="web_search_auto">Automatically search the web for live information</string>
+    <string name="web_search_privacy_note">When enabled, PocketMind may send a short query to DuckDuckGo. Turning this off disables automatic searches; explicit web-search requests still work.</string>
     <string name="saved_facts">Saved facts</string>
     <string name="recent_actions">Recent actions</string>
     <string name="saved_notes">Saved notes</string>

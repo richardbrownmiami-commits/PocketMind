@@ -9,6 +9,9 @@ import java.net.URL
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.Locale
+import java.util.concurrent.CancellationException
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import javax.net.ssl.HttpsURLConnection
 
 internal data class LiveSearchHit(
@@ -17,23 +20,59 @@ internal data class LiveSearchHit(
     val snippet: String
 )
 
-/** Network access used only by the explicit, model-planned web.search function tool. */
+/** A per-message cancellation signal that can interrupt an in-flight search connection. */
+internal class SearchCancellation {
+    private val cancelled = AtomicBoolean(false)
+    private val searchStarted = AtomicBoolean(false)
+    private val activeConnection = AtomicReference<HttpsURLConnection?>(null)
+
+    val isCancelled: Boolean get() = cancelled.get()
+
+    fun cancel() {
+        cancelled.set(true)
+        activeConnection.get()?.disconnect()
+    }
+
+    fun throwIfCancelled() {
+        if (isCancelled) throw CancellationException("Web search was cancelled")
+    }
+
+    fun beginSearch() {
+        throwIfCancelled()
+        if (!searchStarted.compareAndSet(false, true)) {
+            throw IOException("Only one web search is allowed per message")
+        }
+    }
+
+    fun attach(connection: HttpsURLConnection) {
+        activeConnection.set(connection)
+        if (isCancelled) connection.disconnect()
+    }
+
+    fun detach(connection: HttpsURLConnection) {
+        activeConnection.compareAndSet(connection, null)
+    }
+}
+
+/** Network access for explicit and model-requested web.search calls through the validated tool runtime. */
 internal object LiveWebSearch {
     private const val SEARCH_ENDPOINT = "https://html.duckduckgo.com/html/?q="
     private const val MAX_SEARCH_CHARS = 240
     private const val MAX_RESPONSE_CHARS = 180_000
     private const val MAX_SOURCE_URL_CHARS = 512
 
-    private val anchorRegex = Regex("""(?is)<a\b([^>]*)>(.*?)</a>""")
     private val attributeRegex = Regex("""(?i)([a-z][a-z0-9_:-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""")
 
-    fun search(context: Context, query: String, limit: Int): List<LiveSearchHit> {
+    fun search(context: Context, query: String, limit: Int, cancellation: SearchCancellation): List<LiveSearchHit> {
+        cancellation.throwIfCancelled()
         val normalized = query.trim().take(MAX_SEARCH_CHARS)
         if (normalized.isEmpty()) throw IOException("A search query is required")
+        cancellation.beginSearch()
         val userAgent = WebSettings.getDefaultUserAgent(context)
         val encodedQuery = URLEncoder.encode(normalized, StandardCharsets.UTF_8.name())
-        val html = getSearchPage(encodedQuery, userAgent)
+        val html = getSearchPage(encodedQuery, userAgent, cancellation)
             ?: throw IOException("The search provider returned no page")
+        cancellation.throwIfCancelled()
 
         val anchors = elementsWithClass(html, "result__a")
         val snippets = elementsWithClass(html, "result__snippet")
@@ -49,10 +88,12 @@ internal object LiveWebSearch {
         if (results.isEmpty() && Regex("(?i)anomaly-modal|captcha|unusual traffic").containsMatchIn(html)) {
             throw IOException("The search provider temporarily blocked this request")
         }
+        cancellation.throwIfCancelled()
         return results
     }
 
-    private fun getSearchPage(encodedQuery: String, userAgent: String): String? {
+    private fun getSearchPage(encodedQuery: String, userAgent: String, cancellation: SearchCancellation): String? {
+        cancellation.throwIfCancelled()
         val connection = (URL(SEARCH_ENDPOINT + encodedQuery).openConnection() as HttpsURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 7_000
@@ -62,8 +103,11 @@ internal object LiveWebSearch {
             setRequestProperty("Accept", "text/html,application/xhtml+xml")
             setRequestProperty("User-Agent", userAgent)
         }
+        cancellation.attach(connection)
         return try {
+            cancellation.throwIfCancelled()
             val status = connection.responseCode
+            cancellation.throwIfCancelled()
             if (status == 202) throw IOException("The search provider temporarily blocked this request")
             if (status !in 200..299) return null
             val contentType = connection.contentType?.substringBefore(';')?.trim()?.lowercase(Locale.ROOT).orEmpty()
@@ -72,13 +116,16 @@ internal object LiveWebSearch {
                 val output = StringBuilder()
                 val buffer = CharArray(4096)
                 while (output.length < MAX_RESPONSE_CHARS) {
+                    cancellation.throwIfCancelled()
                     val count = reader.read(buffer, 0, minOf(buffer.size, MAX_RESPONSE_CHARS - output.length))
                     if (count < 0) break
                     output.append(buffer, 0, count)
                 }
+                cancellation.throwIfCancelled()
                 output.toString()
             }
         } finally {
+            cancellation.detach(connection)
             connection.disconnect()
         }
     }
@@ -87,7 +134,7 @@ internal object LiveWebSearch {
         // Search-result snippets are commonly <td>/<div> elements, not anchors.
         // Parsing only <a> tags silently discarded every snippet and made the
         // agent treat valid search hits as title-only results.
-        val elementRegex = Regex("""(?is)<([a-z][a-z0-9]*)\\b([^>]*)>(.*?)</\\1\\s*>""")
+        val elementRegex = Regex("""(?is)<([a-z][a-z0-9]*)\b([^>]*)>(.*?)</\1\s*>""")
         return elementRegex.findAll(html).mapNotNull { match ->
             val attributes = match.groupValues[2]
             val classes = attribute(attributes, "class")?.split(Regex("\\s+")) ?: return@mapNotNull null

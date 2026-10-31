@@ -1,7 +1,6 @@
 package com.pocketmind.tools
 
 import android.content.Context
-import android.content.pm.ApplicationInfo
 import android.os.Build
 import android.util.Log
 import java.io.File
@@ -24,7 +23,6 @@ object AppLog {
     private const val MAX_BYTES = 1024L * 1024L
     private const val DEFAULT_VIEWER_LINES = 1500
     private const val MAX_DETAIL_CHARS = 1200
-    private const val MAX_CONTENT_CHARS = 16_000
     private const val MAX_QUEUED_EVENTS = 512
     private val lock = Any()
     private val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
@@ -64,20 +62,6 @@ object AppLog {
             }
         }
         write(context, "ERROR", event, suffix)
-    }
-
-    /** Temporary, user-authorized content diagnostics; stored in the app log file, not Logcat. */
-    fun content(context: Context, event: String, value: String, detail: String = "") {
-        if ((context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) == 0) return
-        val safeContent = sanitizeContent(value)
-        val parts = safeContent.chunked(MAX_CONTENT_CHARS).ifEmpty { listOf("") }
-        parts.forEachIndexed { index, part ->
-            val partDetail = buildString {
-                if (detail.isNotBlank()) append(detail).append(' ')
-                append("part=").append(index + 1).append('/').append(parts.size).append(" content=").append(part)
-            }
-            write(context, "INFO", event, partDetail, MAX_CONTENT_CHARS + 400, includeInLogcat = false)
-        }
     }
 
     /** Context-free form for stores and background components; available after Application.onCreate. */
@@ -178,19 +162,6 @@ object AppLog {
         .replace(Regex("[\\r\\n\\t\\u0000-\\u001F]+"), " ")
         .replace(Regex("\\s+"), " ")
         .trim()
-
-    private fun sanitizeContent(value: String): String = value
-        .replace(urlPattern, "[url-redacted]")
-        .replace(authSchemePattern, "[authorization-redacted]")
-        .replace(secretAssignmentPattern) { "${it.groupValues[1]}=[redacted]" }
-        .replace(credentialPhrasePattern, "[credential-redacted]")
-        .replace(knownTokenPattern, "[token-redacted]")
-        .replace(paymentCardPattern, "[number-redacted]")
-        .replace("\r\n", "\n")
-        .replace('\r', '\n')
-        .replace("\n", "\\n")
-        .replace("\t", "\\t")
-        .replace(Regex("[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F]"), "")
 
     private fun writeNow(context: Context, level: String, event: String, detail: String, includeInLogcat: Boolean = true) {
         synchronized(lock) {

@@ -56,6 +56,21 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:text="@string/recall_conversations" />
+
+                    <com.google.android.material.materialswitch.MaterialSwitch
+                        android:id="@+id/web_search_switch"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/web_search_auto" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:paddingStart="@dimen/space_12"
+                        android:paddingEnd="@dimen/space_12"
+                        android:text="@string/web_search_privacy_note"
+                        android:textAppearance="?android:attr/textAppearanceSmall"
+                        android:textColor="?android:attr/textColorSecondary" />
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
