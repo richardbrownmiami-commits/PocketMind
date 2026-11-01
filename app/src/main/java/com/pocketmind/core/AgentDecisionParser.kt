@@ -172,23 +172,62 @@ internal object AgentDecisionParser {
 /** llama.cpp GBNF constrains output to the same one-decision protocol; parsing remains mandatory. */
 internal object AgentDecisionGrammar {
     fun build(registry: ToolRegistry, allowToolCalls: Boolean = true): String {
-        val root = if (allowToolCalls) "root ::= final | call" else "root ::= final"
-        val callRules = if (!allowToolCalls) "" else {
-            val tools = registry.all.joinToString(" | ") { "\"${it.id}\"" }
-            """
-                call ::= "{\"kind\":\"call\",\"tool\":\"" tool "\",\"args\":" object "}"
-                tool ::= $tools
-                object ::= "{}" | "{" pair ("," pair)* "}"
-                pair ::= string ":" value
-                value ::= string | number | "true" | "false" | "null"
-            """.trimIndent()
-        }
-        return """
-            $root
-            final ::= "{\"kind\":\"final\",\"text\":" string "}"
-            $callRules
-            string ::= "\"" ([^"\\\x00-\x1F] | "\\" ["\\/bfnrt] | "\\u" [0-9a-fA-F]{4})* "\""
-            number ::= "-"? ("0" | [1-9] [0-9]*) ("." [0-9]+)? ([eE] [+-]? [0-9]+)?
-        """.trimIndent()
+        val tools = if (allowToolCalls) registry.all else emptyList()
+        return buildString {
+            appendLine(if (tools.isEmpty()) "root ::= final" else "root ::= final | call")
+            appendLine("final ::= \"{\\\"kind\\\":\\\"final\\\",\\\"text\\\":\" nonempty-string \"}\"")
+            appendLine("string ::= \"\\\"\" json-char* \"\\\"\"")
+            appendLine("nonempty-string ::= \"\\\"\" json-char json-char* \"\\\"\"")
+            appendLine("json-char ::= [^\"\\\\\\x00-\\x1F] | \"\\\\\" [\"\\\\/bfnrt] | \"\\\\u\" [0-9a-fA-F]{4}")
+            appendLine("integer ::= \"-\"? (\"0\" | [1-9] [0-9]*)")
+            appendLine("number ::= \"-\"? (\"0\" | [1-9] [0-9]*) (\".\" [0-9]+)? ([eE] [+-]? [0-9]+)?")
+
+            if (tools.isNotEmpty()) {
+                appendLine("call ::= ${tools.indices.joinToString(" | ") { "call-$it" }}")
+                tools.forEachIndexed { toolIndex, spec ->
+                    val argsRule = "args-$toolIndex"
+                    appendLine("call-$toolIndex ::= ${grammarLiteral("{\"kind\":\"call\",\"tool\":\"${spec.id}\",\"args\":")} $argsRule ${grammarLiteral("}")}")
+                    spec.args.forEachIndexed { argIndex, arg ->
+                        val rule = argumentRule(toolIndex, argIndex)
+                        appendLine("$rule ::= ${argumentValueRule(arg)}")
+                    }
+                    val alternatives = argumentVariants(spec).map { args ->
+                        if (args.isEmpty()) grammarLiteral("{}") else buildString {
+                            append(grammarLiteral("{"))
+                            args.forEachIndexed { argIndex, arg ->
+                                append(' ')
+                                if (argIndex > 0) append(grammarLiteral(",")).append(' ')
+                                append(grammarLiteral("\"${arg.name}\":"))
+                                append(' ').append(argumentRule(toolIndex, spec.args.indexOf(arg)))
+                            }
+                            append(' ').append(grammarLiteral("}"))
+                        }
+                    }
+                    appendLine("$argsRule ::= ${alternatives.joinToString(" | ")}")
+                }
+            }
+        }.trimEnd()
     }
+
+    private fun argumentVariants(spec: com.pocketmind.tools.ToolSpec): List<List<com.pocketmind.tools.ArgSpec>> {
+        val required = spec.args.filter { it.required }
+        val optional = spec.args.filterNot { it.required }
+        require(optional.size <= 12) { "Tool schema has too many optional arguments" }
+        return (0 until (1 shl optional.size)).map { mask ->
+            val chosen = required + optional.filterIndexed { index, _ -> mask and (1 shl index) != 0 }
+            chosen
+        }
+    }
+
+    private fun argumentRule(toolIndex: Int, argIndex: Int): String = "arg-$toolIndex-$argIndex"
+
+    private fun argumentValueRule(arg: com.pocketmind.tools.ArgSpec): String = when (arg.type) {
+        com.pocketmind.tools.ArgType.STRING -> "string"
+        com.pocketmind.tools.ArgType.NUMBER -> "number"
+        com.pocketmind.tools.ArgType.BOOLEAN -> "(\"true\" | \"false\")"
+        com.pocketmind.tools.ArgType.INTEGER -> "integer"
+    }
+
+    private fun grammarLiteral(value: String): String =
+        "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 }

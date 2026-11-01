@@ -31,12 +31,6 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
-/** A capability veto only: it never chooses a tool, but prevents partial app launches for messaging tasks. */
-private object UnsupportedAppActionGuard {
-    private val inAppAction = Regex("(?i)\\b(?:send|sending|text|message|messaging|reply|post|comment|email|e-mail|dm|type|typing)\\b")
-    fun blocksAppOpen(request: String): Boolean = inAppAction.containsMatchIn(request)
-}
-
 class ToolRuntime internal constructor(
     private val context: Context,
     private val registry: ToolRegistry,
@@ -78,15 +72,12 @@ class ToolRuntime internal constructor(
         val safeSource = safeIdentifier(source)
         val safeTool = safeIdentifier(call.tool)
         AppLog.info(app, "TOOL_CALL_STARTED", "source=$safeSource tool=$safeTool")
-        val validationError = ToolCallDecoder.error(call, registry)
-        val result = if (validationError != null) {
+        val shapeError = ToolInvocationShape.structuralError(call, registry)
+        val result = if (shapeError != null) {
             AppLog.warn(app, "TOOL_CALL_REJECTED", "tool=$safeTool reason=typed_input")
-            failed(call, validationError)
-        } else if (call.tool == "app.open" && UnsupportedAppActionGuard.blocksAppOpen(originalRequest)) {
-            AppLog.warn(app, "TOOL_CALL_REJECTED", "tool=$safeTool reason=unsupported_in_app_action")
-            failed(call, "I can only open apps; I cannot send or type messages, so no app was opened.")
+            failed(call, shapeError)
         } else {
-            perform(call, originalRequest)
+            perform(call)
         }
         val completed = finish(call, originalRequest, result.status, result.message, source)
         val reason = if (completed.status == ActionStatus.FAILED) failureCategory(call.tool, completed.message) else "none"
@@ -107,7 +98,7 @@ class ToolRuntime internal constructor(
         }
     }
 
-    private fun perform(step: ToolInvocation, originalRequest: String): ActionResult {
+    private fun perform(step: ToolInvocation): ActionResult {
         val a = step.args
         return try {
             when (step.tool) {
@@ -151,7 +142,7 @@ class ToolRuntime internal constructor(
                 "web.search" -> webSearch(step)
                 "api.discover" -> apiDiscover(step)
                 "api.get" -> apiGet(step)
-                "alarm.set" -> setAlarm(step, originalRequest)
+                "alarm.set" -> setAlarm(step)
                 "timer.set" -> setTimer(step)
                 "flashlight" -> setTorch(step, a["enabled"] as Boolean)
                 "volume" -> setVolume(step)
@@ -275,21 +266,11 @@ class ToolRuntime internal constructor(
         }
     }
 
-    private fun setAlarm(step: ToolInvocation, originalRequest: String): ActionResult {
+    private fun setAlarm(step: ToolInvocation): ActionResult {
         val hour = (step.args["hour"] as Number).toInt()
         val minute = (step.args["minute"] as Number).toInt()
         val displayTime = LocalTime.of(hour, minute).format(DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault()))
-        val dayOffset = (step.args["daysFromToday"] as? Number)?.toInt()
-        val label = (step.args["label"] as? String)?.take(80)
-        if (AlarmCalendarDateGuard.requestsUnsupportedDate(originalRequest, step)) {
-            return failed(
-                step,
-                "Android Clock's alarm action cannot schedule a one-time calendar date or weekday. I did not set an alarm; please set it directly in Clock."
-            )
-        }
-        if (dayOffset == 0 && !LocalDate.now().atTime(hour, minute).isAfter(LocalDateTime.now())) {
-            return failed(step, "That time has already passed today; choose a later time or tomorrow.")
-        }
+        val label = step.args["label"] as? String
         val intent = Intent(AlarmClock.ACTION_SET_ALARM)
             .putExtra(AlarmClock.EXTRA_HOUR, hour)
             .putExtra(AlarmClock.EXTRA_MINUTES, minute)
@@ -301,22 +282,17 @@ class ToolRuntime internal constructor(
         } catch (_: SecurityException) {
             return failed(step, "Could not reach the Clock app. It may be blocked on this phone.")
         }
-        val target = LocalDate.now().plusDays((dayOffset ?: 0).toLong()).atTime(hour, minute)
-            .let { if (dayOffset == null && !it.isAfter(LocalDateTime.now())) it.plusDays(1) else it }
+        val target = LocalDate.now().atTime(hour, minute)
+            .let { if (!it.isAfter(LocalDateTime.now())) it.plusDays(1) else it }
         val expectedMillis = target.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
         val observed = runCatching {
             (app.getSystemService(Context.ALARM_SERVICE) as AlarmManager).nextAlarmClock?.triggerTime
         }.getOrNull()
-        val day = when {
-            dayOffset == 0 -> " today"
-            target.toLocalDate().isAfter(LocalDate.now()) -> " tomorrow"
-            else -> ""
-        }
         val matchingNextAlarm = observed != null && kotlin.math.abs(observed - expectedMillis) <= 90_000L
         return if (matchingNextAlarm) {
-            handoff(step, "The Clock app received the request for $displayTime$day; Android reports a matching next alarm, but this app cannot verify which app created it. This is not independently verified.")
+            handoff(step, "The Clock app received the request for $displayTime; Android reports a matching next alarm, but this app cannot verify which app created it. This is not independently verified.")
         } else {
-            handoff(step, "The Clock app received the request for $displayTime$day, but Android did not expose a matching next alarm. This action is not independently verified.")
+            handoff(step, "The Clock app received the request for $displayTime, but Android did not expose a matching next alarm. This action is not independently verified.")
         }
     }
 

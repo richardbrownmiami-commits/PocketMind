@@ -298,7 +298,7 @@ class ActionLogStore(private val db: SQLiteDatabase) {
 
     fun record(request: String, tool: String, argsJson: String, outcome: String, message: String, source: String = "legacy") {
         AppLog.databaseOperation("action_log", "record") {
-        val safeArgs = Regex("(?:hour|minute|daysFromToday|seconds|level|step|index|enabled)=([^,}]+)").findAll(argsJson)
+        val safeArgs = Regex("(?:hour|minute|seconds|level|step|index|enabled)=([^,}]+)").findAll(argsJson)
             .joinToString(prefix = "{", postfix = "}") { "${it.groupValues[0]}" }.take(500)
         val safeMessage = when (tool) {
             "note.save" -> "Saved note and verified read-back."

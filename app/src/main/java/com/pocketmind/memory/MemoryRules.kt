@@ -31,6 +31,12 @@ object MemoryRules {
         return MemoryNeeds(facts = asksAboutFacts, recall = recallNeeded)
     }
 
+    /** Short turns may depend on the immediately preceding exchange; this uses no request-keyword routing. */
+    fun needsRecentConversation(question: String, maxShortChars: Int = 120): Boolean {
+        val clean = question.trim()
+        return clean.isNotEmpty() && clean.length <= maxShortChars
+    }
+
     fun extractFact(text: String): FactCandidate? {
         val match = factPatterns.firstNotNullOfOrNull { it.find(text) } ?: return null
         val value = match.groupValues[1].trim().take(240)

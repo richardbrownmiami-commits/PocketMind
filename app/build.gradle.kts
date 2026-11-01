@@ -14,8 +14,8 @@ android {
         applicationId = "com.pocketmind"
         minSdk = 30
         targetSdk = 30
-        versionCode = 8
-        versionName = "0.2.5"
+        versionCode = 9
+        versionName = "0.2.6"
         ndk { abiFilters += "armeabi-v7a" }
         externalNativeBuild {
             cmake {
