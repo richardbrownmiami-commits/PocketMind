@@ -25,7 +25,12 @@ class LocalAgent(private val memory: MemoryStore) {
     private var loadedHandle: Long = 0L
     private var loadedModelKey: String? = null
 
-    fun loadModel(path: String, previousHandle: Long, onComplete: (Long, Boolean, String?) -> Unit) {
+    fun loadModel(
+        path: String,
+        previousHandle: Long,
+        onProgress: (String) -> Unit = {},
+        onComplete: (Long, Boolean, String?) -> Unit
+    ) {
         submit(onRejected = { post { if (!closed.get()) onComplete(0L, false, "Model loader is closed") } }) {
             var newHandle = 0L
             try {
@@ -38,8 +43,10 @@ class LocalAgent(private val memory: MemoryStore) {
                 val modelKey = memory.modelKey(file)
                 val rulesKey = memory.rulesKey(SYSTEM_PROMPT)
                 val savedState = runCatching { memory.loadKv(modelKey, rulesKey) }.getOrNull()
+                post { if (!closed.get()) onProgress("Loading model into memory") }
                 newHandle = NativeLlama.init(path, 2048, 2)
                 if (newHandle == 0L) throw IllegalStateException("Model could not be loaded")
+                post { if (!closed.get()) onProgress("Starting model session") }
                 val sessionStatus = NativeLlama.startSession(newHandle, SYSTEM_PROMPT, savedState)
                 if (sessionStatus < 0) throw IllegalStateException("Model session could not be started")
                 if (savedState != null && sessionStatus == 0) memory.saveKv(modelKey, rulesKey, null)
@@ -48,12 +55,32 @@ class LocalAgent(private val memory: MemoryStore) {
                 loadedModelKey = modelKey
                 val resumed = sessionStatus == 1
                 post { if (!closed.get()) onComplete(newHandle, resumed, null) }
-            } catch (_: Exception) {
-                if (newHandle != 0L) NativeLlama.unload(newHandle)
+            } catch (_: OutOfMemoryError) {
+                releaseFailedLoad(newHandle)
                 loadedHandle = 0L
                 loadedModelKey = null
-                post { if (!closed.get()) onComplete(0L, false, "Model could not be loaded") }
+                post {
+                    if (!closed.get()) {
+                        onComplete(0L, false, "Not enough memory to load this GGUF. Try a smaller quantized model.")
+                    }
+                }
+            } catch (error: Exception) {
+                releaseFailedLoad(newHandle)
+                loadedHandle = 0L
+                loadedModelKey = null
+                val detail = error.message?.takeIf { it.isNotBlank() && it.length <= 180 }
+                    ?: "Model could not be loaded"
+                post { if (!closed.get()) onComplete(0L, false, detail) }
             }
+        }
+    }
+
+    private fun releaseFailedLoad(handle: Long) {
+        if (handle == 0L) return
+        try {
+            NativeLlama.unload(handle)
+        } catch (_: Exception) {
+        } catch (_: OutOfMemoryError) {
         }
     }
 

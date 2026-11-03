@@ -12,8 +12,8 @@ android {
         applicationId = "com.pocketmind"
         minSdk = 30
         targetSdk = 30
-        versionCode = 10
-        versionName = "0.2.7"
+        versionCode = 11
+        versionName = "0.2.8"
 
         ndk {
             abiFilters += "armeabi-v7a"
@@ -30,6 +30,10 @@ android {
         getByName("release") {
             isMinifyEnabled = false
         }
+    }
+
+    lint {
+        disable += "ExpiredTargetSdkVersion"
     }
 
     compileOptions {

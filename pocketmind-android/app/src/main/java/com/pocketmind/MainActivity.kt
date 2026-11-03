@@ -128,7 +128,7 @@ class MainActivity : Activity() {
         val previousHandle = modelHandle
         modelHandle = 0L
         setBusy(true)
-        statusView.text = "Copying and loading model…"
+        statusView.text = "Copying selected GGUF into app storage…"
         try {
             fileExecutor.execute {
                 var destination: File? = null
@@ -145,7 +145,19 @@ class MainActivity : Activity() {
                         FileOutputStream(modelFile).use { target -> copyStream(source, target) }
                     }
                     if (modelFile.length() == 0L) throw IllegalStateException("Selected model file is empty")
-                    agent.loadModel(modelFile.absolutePath, previousHandle) { handle, resumed, error ->
+                    runOnUiThread {
+                        if (!isFinishing && !isDestroyed) statusView.text = "GGUF copied; waiting for model loader…"
+                    }
+                    agent.loadModel(
+                        modelFile.absolutePath,
+                        previousHandle,
+                        onProgress = { phase ->
+                            if (!isFinishing && !isDestroyed) {
+                                val sizeMiB = modelFile.length() / (1024L * 1024L)
+                                statusView.text = "$phase: $displayName (${sizeMiB} MiB)"
+                            }
+                        }
+                    ) { handle, resumed, error ->
                         if (isFinishing || isDestroyed) return@loadModel
                         if (handle != 0L && error == null) {
                             modelHandle = handle
@@ -157,12 +169,20 @@ class MainActivity : Activity() {
                             statusView.text = if (resumed) "Model: loaded • saved KV memory restored" else "Model: loaded"
                             setBusy(false)
                         } else {
-                            modelFile.delete()
                             modelHandle = 0L
-                            statusView.text = "Model: not loaded"
+                            statusView.text = "Model: not loaded • import copy kept"
                             outputView.text = error ?: "Model could not be loaded"
                             setBusy(false)
                         }
+                    }
+                } catch (_: OutOfMemoryError) {
+                    destination?.delete()
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        modelHandle = previousHandle
+                        statusView.text = if (previousHandle != 0L) "Model: loaded" else "Model: not loaded"
+                        outputView.text = "Not enough memory to copy this GGUF. The incomplete copy was removed."
+                        setBusy(false)
                     }
                 } catch (_: Exception) {
                     destination?.delete()
@@ -210,7 +230,13 @@ class MainActivity : Activity() {
                     }
                     return@execute
                 }
-                agent.loadModel(canonical.absolutePath, 0L) { handle, resumed, error ->
+                agent.loadModel(
+                    canonical.absolutePath,
+                    0L,
+                    onProgress = { phase ->
+                        if (!isFinishing && !isDestroyed) statusView.text = "$phase: saved model"
+                    }
+                ) { handle, resumed, error ->
                     if (isFinishing || isDestroyed) return@loadModel
                     if (handle != 0L && error == null) {
                         modelHandle = handle
