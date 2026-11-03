@@ -24,6 +24,11 @@ class LocalAgent(private val memory: MemoryStore) {
     // Accessed only on executor thread.
     private var loadedHandle: Long = 0L
     private var loadedModelKey: String? = null
+    private var loadedRulesKey: String? = null
+
+    private fun rulesKeyForModel(usesLlama3Formatter: Boolean): String = memory.rulesKey(
+        if (usesLlama3Formatter) "$LLAMA3_SESSION_FORMAT_REVISION\n$SYSTEM_PROMPT" else SYSTEM_PROMPT
+    )
 
     fun loadModel(
         path: String,
@@ -38,27 +43,29 @@ class LocalAgent(private val memory: MemoryStore) {
                 if (loadedHandle != 0L && loadedHandle != previousHandle) NativeLlama.unload(loadedHandle)
                 loadedHandle = 0L
                 loadedModelKey = null
+                loadedRulesKey = null
 
                 val file = File(path)
                 val modelKey = memory.modelKey(file)
-                val rulesKey = memory.rulesKey(SYSTEM_PROMPT)
-                val savedState = runCatching { memory.loadKv(modelKey, rulesKey) }.getOrNull()
                 post { if (!closed.get()) onProgress("Loading model into memory") }
                 newHandle = NativeLlama.init(path, 2048, 2)
                 if (newHandle == 0L) throw IllegalStateException("Model could not be loaded")
+                val rulesKey = rulesKeyForModel(NativeLlama.usesLlama3ChatFormat(newHandle))
+                val savedState = runCatching { memory.loadKv(modelKey, rulesKey) }.getOrNull()
                 post { if (!closed.get()) onProgress("Starting model session") }
                 val sessionStatus = NativeLlama.startSession(newHandle, SYSTEM_PROMPT, savedState)
                 if (sessionStatus < 0) throw IllegalStateException("Model session could not be started")
-                if (savedState != null && sessionStatus == 0) memory.saveKv(modelKey, rulesKey, null)
                 memory.saveLastModel(file.absolutePath, modelKey)
                 loadedHandle = newHandle
                 loadedModelKey = modelKey
+                loadedRulesKey = rulesKey
                 val resumed = sessionStatus == 1
                 post { if (!closed.get()) onComplete(newHandle, resumed, null) }
             } catch (_: OutOfMemoryError) {
                 releaseFailedLoad(newHandle)
                 loadedHandle = 0L
                 loadedModelKey = null
+                loadedRulesKey = null
                 post {
                     if (!closed.get()) {
                         onComplete(0L, false, "Not enough memory to load this GGUF. Try a smaller quantized model.")
@@ -68,6 +75,7 @@ class LocalAgent(private val memory: MemoryStore) {
                 releaseFailedLoad(newHandle)
                 loadedHandle = 0L
                 loadedModelKey = null
+                loadedRulesKey = null
                 val detail = error.message?.takeIf { it.isNotBlank() && it.length <= 180 }
                     ?: "Model could not be loaded"
                 post { if (!closed.get()) onComplete(0L, false, detail) }
@@ -91,6 +99,7 @@ class LocalAgent(private val memory: MemoryStore) {
             if (loadedHandle == handle) {
                 loadedHandle = 0L
                 loadedModelKey = null
+                loadedRulesKey = null
             }
             post { if (!closed.get()) onComplete() }
         }
@@ -215,9 +224,10 @@ class LocalAgent(private val memory: MemoryStore) {
     /** Save a bounded opaque state snapshot before unload or after a completed turn. */
     private fun persistCurrentState(handle: Long): Boolean {
         val key = loadedModelKey ?: return false
+        val rulesKey = loadedRulesKey ?: return false
         if (handle == 0L || handle != loadedHandle) return false
         return try {
-            memory.saveKv(key, memory.rulesKey(SYSTEM_PROMPT), NativeLlama.saveKvState(handle))
+            memory.saveKv(key, rulesKey, NativeLlama.saveKvState(handle))
         } catch (_: Exception) {
             false
         }
@@ -226,13 +236,12 @@ class LocalAgent(private val memory: MemoryStore) {
     /** Roll back an interrupted native turn to the latest successfully saved context. */
     private fun recoverCurrentSession(handle: Long): Boolean {
         val key = loadedModelKey ?: return false
+        val rulesKey = loadedRulesKey ?: return false
         if (handle == 0L || handle != loadedHandle) return false
         return try {
-            val rulesKey = memory.rulesKey(SYSTEM_PROMPT)
             val saved = runCatching { memory.loadKv(key, rulesKey) }.getOrNull()
             val status = NativeLlama.startSession(handle, SYSTEM_PROMPT, saved)
             if (status < 0) return false
-            if (saved != null && status == 0) memory.saveKv(key, rulesKey, null)
             true
         } catch (_: Exception) {
             false
@@ -252,6 +261,7 @@ class LocalAgent(private val memory: MemoryStore) {
                 if (activityHandle != 0L && activityHandle != current) NativeLlama.unload(activityHandle)
                 loadedHandle = 0L
                 loadedModelKey = null
+                loadedRulesKey = null
                 memory.close()
             }
             executor.shutdown()
@@ -321,6 +331,7 @@ class LocalAgent(private val memory: MemoryStore) {
     }
 
     companion object {
+        private const val LLAMA3_SESSION_FORMAT_REVISION = "pocketmind-session-format-llama3-v1"
         private const val MAX_USER_CHARS = 3_000
         private const val MAX_EVIDENCE_CHARS = 4_000
         private const val MAX_SEARCH_CHARS = 240

@@ -8,6 +8,9 @@ object NativeLlama {
 
     external fun init(modelPath: String, nCtx: Int = 2048, nThreads: Int = 2): Long
 
+    /** True only when the loaded GGUF declares a Llama 3 chat template. */
+    external fun usesLlama3ChatFormat(handle: Long): Boolean
+
     /** Starts a fresh session or restores a compatible opaque sequence-state snapshot. */
     external fun startSession(handle: Long, systemPrompt: String, savedState: ByteArray? = null): Int
 

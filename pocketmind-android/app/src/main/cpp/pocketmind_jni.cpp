@@ -21,6 +21,7 @@ struct ModelState {
     uint32_t n_ctx = 2048;
     int32_t n_threads = 2;
     bool session_ready = false;
+    bool llama3_chat_format = false;
 };
 
 std::mutex g_mutex;
@@ -179,6 +180,34 @@ std::string format_one_message(const llama_model * model, const char * role,
     return std::string(buffer.data(), static_cast<size_t>(written));
 }
 
+// Route only Llama architecture GGUFs with the canonical Llama 3 tokens; never rewrite GGUF metadata/Jinja.
+bool uses_llama3_chat_format(const llama_model * model) {
+    if (model == nullptr) return false;
+    char architecture[128] = {};
+    if (llama_model_meta_val_str(model, "general.architecture", architecture, sizeof(architecture)) < 0 ||
+        std::string(architecture) != "llama") {
+        return false;
+    }
+    const char * tmpl = llama_model_chat_template(model, nullptr);
+    if (tmpl == nullptr) return false;
+    const std::string text(tmpl);
+    return text.find("<|start_header_id|>") != std::string::npos &&
+           text.find("<|end_header_id|>") != std::string::npos &&
+           text.find("<|eot_id|>") != std::string::npos;
+}
+
+std::string format_llama3_system_prefix(const std::string & instructions) {
+    return "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n" +
+           instructions + "<|eot_id|>";
+}
+
+std::string format_llama3_user_turn(const std::string & content, bool add_assistant) {
+    std::string formatted = "<|start_header_id|>user<|end_header_id|>\n\n" +
+                            content + "<|eot_id|>";
+    if (add_assistant) formatted += "<|start_header_id|>assistant<|end_header_id|>\n\n";
+    return formatted;
+}
+
 bool tokenize(const llama_vocab * vocab, const std::string & text, bool add_bos,
               bool remove_leading_bos, std::vector<llama_token> & tokens) {
     if (text.size() > static_cast<size_t>(std::numeric_limits<int32_t>::max() - 16)) return false;
@@ -230,7 +259,9 @@ void free_context(ModelState & state) {
 bool seed_system(ModelState & state, const std::string & system_prompt) {
     const llama_vocab * vocab = llama_model_get_vocab(state.model);
     if (vocab == nullptr) return false;
-    const std::string formatted = format_one_message(state.model, "system", system_prompt, false);
+    const std::string formatted = state.llama3_chat_format
+        ? format_llama3_system_prefix(system_prompt)
+        : format_one_message(state.model, "system", system_prompt, false);
     std::vector<llama_token> tokens;
     if (formatted.empty() || !tokenize(vocab, formatted, true, false, tokens)) return false;
     if (tokens.size() >= state.n_ctx) return false;
@@ -277,12 +308,20 @@ Java_com_pocketmind_NativeLlama_init(JNIEnv * env, jobject, jstring jmodel_path,
         state.model = model;
         state.n_ctx = static_cast<uint32_t>(std::clamp(n_ctx, 512, 4096));
         state.n_threads = std::clamp(n_threads, 1, 4);
+        state.llama3_chat_format = uses_llama3_chat_format(model);
         g_models.emplace(handle, state);
         return handle;
     } catch (...) {
         throw_java(env, "Native model initialization failed");
         return 0;
     }
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_pocketmind_NativeLlama_usesLlama3ChatFormat(JNIEnv *, jobject, jlong handle) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    const auto it = g_models.find(handle);
+    return it != g_models.end() && it->second.llama3_chat_format ? JNI_TRUE : JNI_FALSE;
 }
 
 // Returns 1 when a saved KV sequence was restored, 0 when a new session was seeded, -1 on error.
@@ -366,7 +405,9 @@ Java_com_pocketmind_NativeLlama_generate(JNIEnv * env, jobject, jlong handle,
             return nullptr;
         }
 
-        const std::string formatted = format_one_message(state.model, "user", user_prompt, true);
+        const std::string formatted = state.llama3_chat_format
+            ? format_llama3_user_turn(user_prompt, true)
+            : format_one_message(state.model, "user", user_prompt, true);
         std::vector<llama_token> tokens;
         if (formatted.empty() || !tokenize(vocab, formatted, false, true, tokens)) {
             throw_java(env, "Could not tokenize the new message");

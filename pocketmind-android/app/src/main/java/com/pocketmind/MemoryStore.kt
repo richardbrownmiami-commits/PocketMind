@@ -34,7 +34,7 @@ class MemoryStore(context: Context) {
         val db = helper.readableDatabase
         var invalid = false
         val encrypted = db.query(
-            "kv_state", arrayOf("state_blob", "updated_at"), "id=1 AND model_key=? AND rules_key=?",
+            "kv_state", arrayOf("state_blob", "updated_at"), "model_key=? AND rules_key=?",
             arrayOf(modelKey, rulesKey), null, null, null
         ).use { cursor ->
             if (!cursor.moveToFirst()) null
@@ -45,11 +45,15 @@ class MemoryStore(context: Context) {
                 blob?.takeIf { it.size <= MAX_KV_STORAGE_BYTES }
             }
         }
-        if (invalid) helper.writableDatabase.delete("kv_state", "id=1", null)
+        if (invalid) helper.writableDatabase.delete(
+            "kv_state", "model_key=? AND rules_key=?", arrayOf(modelKey, rulesKey)
+        )
         val blob = encrypted ?: return null
         val plain = runCatching { decryptKv(blob) }.getOrNull()
         if (plain == null || plain.isEmpty() || plain.size > MAX_KV_BYTES) {
-            helper.writableDatabase.delete("kv_state", "id=1", null)
+            helper.writableDatabase.delete(
+                "kv_state", "model_key=? AND rules_key=?", arrayOf(modelKey, rulesKey)
+            )
             return null
         }
         return plain
@@ -58,17 +62,15 @@ class MemoryStore(context: Context) {
     /** Returns false when the native cache is too large or secure persistence is unavailable. */
     fun saveKv(modelKey: String, rulesKey: String, state: ByteArray?): Boolean {
         if (state == null || state.isEmpty() || state.size > MAX_KV_BYTES) {
-            helper.writableDatabase.delete("kv_state", "id=1", null)
+            helper.writableDatabase.delete(
+                "kv_state", "model_key=? AND rules_key=?", arrayOf(modelKey, rulesKey)
+            )
             return false
         }
         return try {
             val encrypted = encryptKv(state)
-            if (encrypted.size > MAX_KV_STORAGE_BYTES) {
-                helper.writableDatabase.delete("kv_state", "id=1", null)
-                return false
-            }
+            if (encrypted.size > MAX_KV_STORAGE_BYTES) return false
             val values = ContentValues().apply {
-                put("id", 1)
                 put("model_key", modelKey)
                 put("rules_key", rulesKey)
                 put("state_blob", encrypted)
@@ -78,7 +80,6 @@ class MemoryStore(context: Context) {
                 "kv_state", null, values, SQLiteDatabase.CONFLICT_REPLACE
             ) != -1L
         } catch (_: Exception) {
-            helper.writableDatabase.delete("kv_state", "id=1", null)
             false
         }
     }
@@ -163,7 +164,7 @@ class MemoryStore(context: Context) {
 
     private class StoreDb(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
         override fun onCreate(db: SQLiteDatabase) {
-            db.execSQL("CREATE TABLE kv_state (id INTEGER PRIMARY KEY CHECK(id=1), model_key TEXT NOT NULL, rules_key TEXT NOT NULL, state_blob BLOB NOT NULL, updated_at INTEGER NOT NULL)")
+            db.execSQL("CREATE TABLE kv_state (model_key TEXT NOT NULL, rules_key TEXT NOT NULL, state_blob BLOB NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(model_key, rules_key))")
             db.execSQL("CREATE TABLE last_model (id INTEGER PRIMARY KEY CHECK(id=1), path TEXT NOT NULL, model_key TEXT NOT NULL)")
         }
 
@@ -173,11 +174,18 @@ class MemoryStore(context: Context) {
                 db.execSQL("DROP TABLE IF EXISTS search_cache")
                 db.execSQL("DROP TABLE IF EXISTS page_cache")
             }
+            if (oldVersion < 3) {
+                // Preserve the opaque encrypted snapshot while allowing new prompt versions to coexist.
+                db.execSQL("CREATE TABLE kv_state_v3 (model_key TEXT NOT NULL, rules_key TEXT NOT NULL, state_blob BLOB NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(model_key, rules_key))")
+                db.execSQL("INSERT INTO kv_state_v3 (model_key, rules_key, state_blob, updated_at) SELECT model_key, rules_key, state_blob, updated_at FROM kv_state")
+                db.execSQL("DROP TABLE kv_state")
+                db.execSQL("ALTER TABLE kv_state_v3 RENAME TO kv_state")
+            }
         }
 
         companion object {
             private const val DATABASE_NAME = "pocketmind_memory.db"
-            private const val DATABASE_VERSION = 2
+            private const val DATABASE_VERSION = 3
         }
     }
 
