@@ -342,30 +342,40 @@ Java_com_pocketmind_NativeLlama_startSession(JNIEnv * env, jobject, jlong handle
         }
         ModelState & state = it->second;
         free_context(state);
-        state.context = make_context(state);
-        if (state.context == nullptr) {
-            throw_java(env, "Could not create the model context");
-            return -1;
-        }
 
-        bool restored = false;
+        std::vector<uint8_t> bytes;
         if (saved_state != nullptr) {
             const jsize length = env->GetArrayLength(saved_state);
             if (length > 0 && static_cast<size_t>(length) <= MAX_PERSIST_KV_BYTES) {
-                std::vector<uint8_t> bytes(static_cast<size_t>(length));
-                env->GetByteArrayRegion(saved_state, 0, length, reinterpret_cast<jbyte *>(bytes.data()));
+                bytes.resize(static_cast<size_t>(length));
+                env->GetByteArrayRegion(saved_state, 0, length,
+                                        reinterpret_cast<jbyte *>(bytes.data()));
                 if (env->ExceptionCheck()) return -1;
-                const size_t loaded = llama_state_seq_set_data(state.context, bytes.data(), bytes.size(), 0);
-                restored = loaded == bytes.size() && loaded > 0;
             }
+        }
+
+        bool restored = false;
+        if (!bytes.empty()) {
+            state.context = make_context(state);
+            if (state.context == nullptr) {
+                throw_java(env, "Could not create the model context");
+                return -1;
+            }
+            const size_t loaded = llama_state_seq_set_data(state.context, bytes.data(), bytes.size(), 0);
+            restored = loaded == bytes.size() && loaded > 0;
         }
         if (restored) {
             state.session_ready = true;
             return 1;
         }
 
-        free_context(state);
-        state.context = make_context(state);
+        if (state.context == nullptr) {
+            // No compatible snapshot: skip the throwaway context and allocate only for seeding.
+            state.context = make_context(state);
+        } else {
+            // A rejected snapshot may have partially populated KV memory; reset it in place.
+            llama_memory_clear(llama_get_memory(state.context), true);
+        }
         if (state.context == nullptr || !seed_system(state, system_prompt)) {
             free_context(state);
             throw_java(env, "Could not start a fresh model session");
