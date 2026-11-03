@@ -124,6 +124,15 @@ class MainActivity : Activity() {
             Toast.makeText(this, "Choose a GGUF model file", Toast.LENGTH_LONG).show()
             return
         }
+        val declaredSize = queryDocumentSize(uri)
+        if (declaredSize != null && declaredSize > MAX_MODEL_BYTES) {
+            Toast.makeText(this, "Model files must be 1.2 GB or smaller", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (declaredSize != null && declaredSize > filesDir.usableSpace) {
+            Toast.makeText(this, "Not enough free app storage for this model", Toast.LENGTH_LONG).show()
+            return
+        }
 
         val previousHandle = modelHandle
         modelHandle = 0L
@@ -142,7 +151,7 @@ class MainActivity : Activity() {
                     val input = contentResolver.openInputStream(uri)
                         ?: throw IllegalStateException("Cannot read selected file")
                     input.use { source ->
-                        FileOutputStream(modelFile).use { target -> copyStream(source, target) }
+                        FileOutputStream(modelFile).use { target -> copyStream(source, target, modelFile) }
                     }
                     if (modelFile.length() == 0L) throw IllegalStateException("Selected model file is empty")
                     runOnUiThread {
@@ -168,6 +177,11 @@ class MainActivity : Activity() {
                             }
                             statusView.text = if (resumed) "Model: loaded • saved KV memory restored" else "Model: loaded"
                             setBusy(false)
+                        } else if (handle != 0L) {
+                            modelHandle = handle
+                            statusView.text = "New model failed • previous model is available"
+                            outputView.text = error ?: "The previous model remains loaded."
+                            setBusy(false)
                         } else {
                             modelHandle = 0L
                             statusView.text = "Model: not loaded • import copy kept"
@@ -184,13 +198,18 @@ class MainActivity : Activity() {
                         outputView.text = "Not enough memory to copy this GGUF. The incomplete copy was removed."
                         setBusy(false)
                     }
-                } catch (_: Exception) {
+                } catch (error: Exception) {
                     destination?.delete()
+                    val message = when (error) {
+                        is ModelTooLargeException -> "Model files must be 1.2 GB or smaller. The incomplete copy was removed."
+                        is InsufficientStorageException -> "Not enough free app storage. The incomplete copy was removed."
+                        else -> "Import failed. Check that the selected file is a readable GGUF model."
+                    }
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
                         modelHandle = previousHandle
                         statusView.text = if (previousHandle != 0L) "Model: loaded" else "Model: not loaded"
-                        outputView.text = "Import failed. Check that the selected file is a readable GGUF model."
+                        outputView.text = message
                         setBusy(false)
                     }
                 }
@@ -319,13 +338,39 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun copyStream(input: InputStream, output: FileOutputStream) {
+    private fun queryDocumentSize(uri: Uri): Long? {
+        var cursor: Cursor? = null
+        return try {
+            cursor = contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)
+            if (cursor != null && cursor.moveToFirst()) {
+                val index = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (index >= 0 && !cursor.isNull(index)) cursor.getLong(index).takeIf { it >= 0L } else null
+            } else null
+        } catch (_: Exception) {
+            null
+        } finally {
+            cursor?.close()
+        }
+    }
+
+    private fun copyStream(input: InputStream, output: FileOutputStream, destination: File) {
         val buffer = ByteArray(64 * 1024)
+        var total = 0L
         while (true) {
             val count = input.read(buffer)
             if (count < 0) break
+            if (total + count > MAX_MODEL_BYTES) throw ModelTooLargeException()
+            if (destination.usableSpace < count) throw InsufficientStorageException()
             output.write(buffer, 0, count)
+            total += count
         }
         output.fd.sync()
+    }
+
+    private class ModelTooLargeException : Exception()
+    private class InsufficientStorageException : Exception()
+
+    companion object {
+        private const val MAX_MODEL_BYTES = 1_200_000_000L
     }
 }

@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cstdint>
 #include <limits>
 #include <map>
@@ -22,6 +23,7 @@ struct ModelState {
     int32_t n_threads = 2;
     bool session_ready = false;
     bool llama3_chat_format = false;
+    bool llama32_light_tool_format = false;
 };
 
 std::mutex g_mutex;
@@ -196,13 +198,34 @@ bool uses_llama3_chat_format(const llama_model * model) {
            text.find("<|eot_id|>") != std::string::npos;
 }
 
+bool uses_llama32_light_tool_format(const llama_model * model) {
+    if (!uses_llama3_chat_format(model)) return false;
+    const char * keys[] = {"general.name", "general.basename"};
+    for (const char * key : keys) {
+        char value[512] = {};
+        if (llama_model_meta_val_str(model, key, value, sizeof(value)) < 0) continue;
+        std::string normalized;
+        normalized.reserve(sizeof(value));
+        for (unsigned char character : std::string(value)) {
+            normalized.push_back(std::isalnum(character)
+                ? static_cast<char>(std::tolower(character))
+                : ' ');
+        }
+        if (normalized.find("llama 3 2 1b") != std::string::npos ||
+            normalized.find("llama 3 2 3b") != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
 std::string format_llama3_system_prefix(const std::string & instructions) {
     return "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n" +
            instructions + "<|eot_id|>";
 }
 
-std::string format_llama3_user_turn(const std::string & content, bool add_assistant) {
-    std::string formatted = "<|start_header_id|>user<|end_header_id|>\n\n" +
+std::string format_llama3_message(const std::string & role, const std::string & content, bool add_assistant) {
+    std::string formatted = "<|start_header_id|>" + role + "<|end_header_id|>\n\n" +
                             content + "<|eot_id|>";
     if (add_assistant) formatted += "<|start_header_id|>assistant<|end_header_id|>\n\n";
     return formatted;
@@ -309,6 +332,7 @@ Java_com_pocketmind_NativeLlama_init(JNIEnv * env, jobject, jstring jmodel_path,
         state.n_ctx = static_cast<uint32_t>(std::clamp(n_ctx, 512, 4096));
         state.n_threads = std::clamp(n_threads, 1, 4);
         state.llama3_chat_format = uses_llama3_chat_format(model);
+        state.llama32_light_tool_format = uses_llama32_light_tool_format(model);
         g_models.emplace(handle, state);
         return handle;
     } catch (...) {
@@ -322,6 +346,13 @@ Java_com_pocketmind_NativeLlama_usesLlama3ChatFormat(JNIEnv *, jobject, jlong ha
     std::lock_guard<std::mutex> lock(g_mutex);
     const auto it = g_models.find(handle);
     return it != g_models.end() && it->second.llama3_chat_format ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_pocketmind_NativeLlama_usesLlama32ToolFormat(JNIEnv *, jobject, jlong handle) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    const auto it = g_models.find(handle);
+    return it != g_models.end() && it->second.llama32_light_tool_format ? JNI_TRUE : JNI_FALSE;
 }
 
 // Returns 1 when a saved KV sequence was restored, 0 when a new session was seeded, -1 on error.
@@ -389,11 +420,17 @@ Java_com_pocketmind_NativeLlama_startSession(JNIEnv * env, jobject, jlong handle
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_pocketmind_NativeLlama_generate(JNIEnv * env, jobject, jlong handle,
-                                        jstring juser_prompt, jint n_predict, jint n_threads) {
+Java_com_pocketmind_NativeLlama_generateWithRole(JNIEnv * env, jobject, jlong handle,
+                                                jstring jrole, jstring jmessage,
+                                                jint n_predict, jint n_threads) {
     try {
+        std::string role;
         std::string user_prompt;
-        if (!copy_string(env, juser_prompt, user_prompt)) {
+        if (!copy_string(env, jrole, role) || (role != "user" && role != "ipython")) {
+            if (!env->ExceptionCheck()) throw_java(env, "Invalid message role");
+            return nullptr;
+        }
+        if (!copy_string(env, jmessage, user_prompt)) {
             if (!env->ExceptionCheck()) throw_java(env, "Invalid prompt");
             return nullptr;
         }
@@ -416,8 +453,8 @@ Java_com_pocketmind_NativeLlama_generate(JNIEnv * env, jobject, jlong handle,
         }
 
         const std::string formatted = state.llama3_chat_format
-            ? format_llama3_user_turn(user_prompt, true)
-            : format_one_message(state.model, "user", user_prompt, true);
+            ? format_llama3_message(role, user_prompt, true)
+            : format_one_message(state.model, role.c_str(), user_prompt, true);
         std::vector<llama_token> tokens;
         if (formatted.empty() || !tokenize(vocab, formatted, false, true, tokens)) {
             throw_java(env, "Could not tokenize the new message");
