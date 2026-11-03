@@ -12,8 +12,8 @@ android {
         applicationId = "com.pocketmind"
         minSdk = 30
         targetSdk = 30
-        versionCode = 12
-        versionName = "0.2.9"
+        versionCode = 13
+        versionName = "0.2.10"
 
         ndk {
             abiFilters += "armeabi-v7a"
