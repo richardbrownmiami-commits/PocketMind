@@ -62,9 +62,7 @@ class MemoryStore(context: Context) {
     /** Returns false when the native cache is too large or secure persistence is unavailable. */
     fun saveKv(modelKey: String, rulesKey: String, state: ByteArray?): Boolean {
         if (state == null || state.isEmpty() || state.size > MAX_KV_BYTES) {
-            helper.writableDatabase.delete(
-                "kv_state", "model_key=? AND rules_key=?", arrayOf(modelKey, rulesKey)
-            )
+            // A failed replacement must not erase the last successfully persisted snapshot.
             return false
         }
         return try {
